@@ -82,7 +82,8 @@ create the observations again. `ObservationProvisioner` does this: for each inst
 `probe.observe.object-ids` that the device lists in its registration, it sends one Observe, asynchronously, so the
 CoAP dispatch thread never waits for the device.
 
-The observed object is our own **Probe Sensor** (`src/main/resources/models/32700.xml`, `ProbeSensor`):
+The observed object is our own **Probe Sensor** (object 32700), defined in the shared library
+[`lwm2m-objects`](../lwm2m-objects) (`ua.kpi.iot:lwm2m-objects`, published to the local Maven repository):
 
 | ID | Resource | Type | Purpose |
 |---|---|---|---|
@@ -99,8 +100,8 @@ The observed object is our own **Probe Sensor** (`src/main/resources/models/3270
 - Sample Time is an Integer in milliseconds on purpose: the LwM2M `Time` type has one-second resolution.
 - Data age compares the device clock with the server clock; it is meaningful when both run on one host or are
   synchronised (NTP), and negative ages are not recorded in the histogram.
-- The device side for tests is `src/test/java/ua/kpi/iot/probe/ProbeSensorInstance.java`; `fleet-emulator` will need
-  the same model file and an equivalent implementation.
+- The device side for tests is `src/test/java/ua/kpi/iot/probe/ProbeSensorInstance.java` (Leshan client);
+  `fleet-emulator` uses the same library.
 
 Observation metrics (in addition to the table below): `probe_lwm2m_observe_latency_seconds{outcome}` (Observe sent →
 device response), `probe_lwm2m_notification_age_seconds`, `probe_lwm2m_notifications_missing_total`,
@@ -174,7 +175,24 @@ Options: `probe.event-log.directory` (default `event-logs`, git-ignored), `probe
 Known limit (by design of java-coap): CoAP request processing is single-threaded per listener. The queue depth
 (`NettyCoapTcpServerTransport#inboundQueueSize`) shows when it becomes the bottleneck.
 
+### Finding: connection loss without Deregister (Leshan 2.0.0-M18)
+
+Characterised by `connectionLossWithoutDeregisterLeavesStaleSessionUntilReRegister`:
+
+1. When the TCP connection drops without Deregister, Leshan **keeps the registration and its observations** until
+   the device registers again or the lifetime expires — although over TCP the observations died with the connection
+   (RFC 8323). The server-side session looks alive.
+2. Requests sent to that stale registration fail (no connection to the device).
+3. On reconnect, the new Register **replaces** the stale registration (`unregistered`, `reason=replaced`, with the
+   number of dropped observations) and the probe observes again — no duplicates.
+
+So, between the drop and the re-registration, server state and reality disagree. This is input for E3 and the
+session-state model.
+
 ## Run
+
+Requires the shared library in the local Maven repository:
+`(cd ../lwm2m-objects && ./gradlew publishToMavenLocal)`.
 
 ```bash
 export JAVA_HOME=$(/usr/libexec/java_home -v 25)
@@ -193,7 +211,9 @@ docker compose logs -f gateway-probe
 docker compose down
 ```
 
-The image is built by the multi-stage `Dockerfile` (Temurin 25 JDK → JRE, non-root user). Ports: 5683 (coap+tcp),
+The image build copies `ua.kpi.iot` artifacts from the host's `~/.m2` (compose `additional_contexts: m2`), so publish
+`lwm2m-objects` locally first; a plain `docker build .` without that context fails. The image is built by the
+multi-stage `Dockerfile` (Temurin 25 JDK → JRE, non-root user). Ports: 5683 (coap+tcp),
 5684 (coaps+tcp), 8080 (HTTP / actuator), 6379 (Redis, debugging only). TCP only:
 `PROBE_LWM2M_TLS_ENABLED=false docker compose up -d`. If 6379 is taken on the host: `REDIS_HOST_PORT=6380 docker compose up -d`.
 

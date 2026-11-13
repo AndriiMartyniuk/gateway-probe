@@ -12,7 +12,11 @@ services:
       retries: 10
 
   gateway-probe:
-    build: .
+    build:
+      context: .
+      # shared ua.kpi.iot libraries published on the host with ./gradlew publishToMavenLocal
+      additional_contexts:
+        m2: ${HOME}/.m2/repository/ua/kpi/iot
     image: gateway-probe:local
     depends_on:
       redis:

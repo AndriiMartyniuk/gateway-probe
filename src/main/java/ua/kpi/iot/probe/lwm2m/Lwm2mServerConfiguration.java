@@ -13,8 +13,6 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-import org.eclipse.leshan.core.model.ObjectLoader;
-import org.eclipse.leshan.core.model.ObjectModel;
 import org.eclipse.leshan.server.LeshanServer;
 import org.eclipse.leshan.server.LeshanServerBuilder;
 import org.eclipse.leshan.server.endpoint.LwM2mServerEndpointsProvider;
@@ -33,6 +31,7 @@ import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.core.io.Resource;
 
+import ua.kpi.iot.lwm2m.objects.ProbeSensor;
 import ua.kpi.iot.probe.telemetry.SessionTelemetry;
 import ua.kpi.iot.probe.transport.CoapTcpServerEndpointsProvider;
 import ua.kpi.iot.probe.transport.CoapsTcpServerEndpointsProvider;
@@ -65,9 +64,7 @@ class Lwm2mServerConfiguration {
 			List<ObservationListener> observationListeners) throws IOException, GeneralSecurityException {
 		ConnectionEventListener connectionEvents = new CompositeConnectionEventListener(connectionListeners);
 		LeshanServerBuilder builder = new LeshanServerBuilder();
-		List<ObjectModel> models = new ArrayList<>(ObjectLoader.loadAllDefault());
-		models.addAll(ProbeSensor.models());
-		builder.setObjectModelProvider(new VersionedModelProvider(models));
+		builder.setObjectModelProvider(new VersionedModelProvider(ProbeSensor.defaultModelsWithProbeSensor()));
 		builder.setSecurityStore(securityStore);
 
 		// Replace Leshan's default UDP (Californium) endpoints with CoAP over TCP / TLS on our own Netty transport.

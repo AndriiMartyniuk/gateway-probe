@@ -19,7 +19,7 @@ import org.eclipse.leshan.server.registration.Registration;
 import org.eclipse.leshan.server.registration.RegistrationListener;
 import org.eclipse.leshan.server.registration.RegistrationUpdate;
 
-import ua.kpi.iot.probe.lwm2m.ProbeSensor;
+import ua.kpi.iot.lwm2m.objects.ProbeSensor;
 import ua.kpi.iot.probe.transport.CloseReason;
 import ua.kpi.iot.probe.transport.ConnectionEventListener;
 

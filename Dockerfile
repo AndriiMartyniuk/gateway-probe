@@ -4,6 +4,8 @@ FROM eclipse-temurin:25-jdk AS build
 WORKDIR /src
 COPY gradlew settings.gradle.kts build.gradle.kts ./
 COPY gradle gradle
+# shared libraries from the host's local Maven repository (compose: additional_contexts.m2)
+COPY --from=m2 . /root/.m2/repository/ua/kpi/iot/
 RUN --mount=type=cache,target=/root/.gradle ./gradlew --no-daemon dependencies > /dev/null
 COPY src src
 RUN --mount=type=cache,target=/root/.gradle ./gradlew --no-daemon bootJar -x test \

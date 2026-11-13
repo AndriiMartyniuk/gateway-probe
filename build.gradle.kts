@@ -15,6 +15,12 @@ java {
 }
 
 repositories {
+	// shared research libraries (lwm2m-objects), published with ./gradlew publishToMavenLocal
+	mavenLocal {
+		content {
+			includeGroup("ua.kpi.iot")
+		}
+	}
 	mavenCentral()
 }
 
@@ -26,6 +32,7 @@ dependencies {
 	// Eclipse Leshan LwM2M server + CoAP over TCP/TLS transport (java-coap + Netty)
 	implementation("org.eclipse.leshan:leshan-lwm2m-server:$leshanVersion")
 	implementation("org.eclipse.leshan:leshan-tl-jc-server-coaptcp:$leshanVersion")
+	implementation("ua.kpi.iot:lwm2m-objects:0.1.0-SNAPSHOT")
 	// Netty version is managed by the Spring Boot BOM
 	implementation("io.netty:netty-handler")
 	implementation("io.netty:netty-codec")

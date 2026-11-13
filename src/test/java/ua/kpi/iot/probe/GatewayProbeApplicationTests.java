@@ -1,6 +1,7 @@
 package ua.kpi.iot.probe;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
 import java.io.IOException;
@@ -34,7 +35,9 @@ import org.eclipse.leshan.core.model.ObjectLoader;
 import org.eclipse.leshan.core.model.ObjectModel;
 import org.eclipse.leshan.core.model.StaticModel;
 import org.eclipse.leshan.core.request.BindingMode;
+import org.eclipse.leshan.core.request.ReadRequest;
 import org.eclipse.leshan.server.LeshanServer;
+import org.eclipse.leshan.server.registration.Registration;
 import org.eclipse.leshan.transport.javacoap.client.coaptcp.endpoint.JavaCoapTcpClientEndpointsProvider;
 import org.eclipse.leshan.transport.javacoap.client.coaptcp.endpoint.JavaCoapsTcpClientEndpointsProvider;
 import org.junit.jupiter.api.BeforeEach;
@@ -51,7 +54,7 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import tools.jackson.databind.json.JsonMapper;
-import ua.kpi.iot.probe.lwm2m.ProbeSensor;
+import ua.kpi.iot.lwm2m.objects.ProbeSensor;
 import ua.kpi.iot.probe.telemetry.JsonlSessionEventLog;
 import ua.kpi.iot.probe.telemetry.SessionEvent;
 import ua.kpi.iot.probe.transport.CloseReason;
@@ -244,6 +247,74 @@ class GatewayProbeApplicationTests {
 			.toList();
 		assertThat(order.getFirst()).isEqualTo("registered");
 		assertThat(order.indexOf("observe_sent")).isLessThan(order.indexOf("observe_done"));
+	}
+
+	/**
+	 * Characterises Leshan (2.0.0-M18) when a TCP connection is lost without Deregister — input for experiment E3
+	 * and the session-state model: the server keeps a stale registration and stale observations until the device
+	 * registers again (or the lifetime expires); requests to the stale registration fail.
+	 */
+	@Test
+	void connectionLossWithoutDeregisterLeavesStaleSessionUntilReRegister() throws Exception {
+		String endpoint = "lossy-device";
+		ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+		try {
+			LeshanClient first = startSensorClient(endpoint, scheduler);
+			awaitRegistered(endpoint);
+			Registration before = server.getRegistrationService().getByEndpoint(endpoint);
+			awaitObservations(before, 2);
+
+			// connection lost: the client closes its socket without sending Deregister
+			first.destroy(false);
+			await().atMost(Duration.ofSeconds(5))
+				.until(() -> !events(e -> endpoint.equals(e.ep()) && e.event().equals("closed")).isEmpty());
+
+			// 1. registration and observations are still on the server, although the observations died with the
+			// connection (RFC 8323)
+			assertThat(server.getRegistrationService().getByEndpoint(endpoint).getId()).isEqualTo(before.getId());
+			assertThat(server.getObservationService().getObservations(before)).hasSize(2);
+
+			// 2. a request to the stale registration fails: there is no connection to the device
+			assertThatThrownBy(() -> server.send(before, new ReadRequest(ProbeSensor.OBJECT_ID, 0), 2_000))
+				.isInstanceOf(Exception.class);
+
+			// 3. on reconnect, the new Register replaces the stale registration and drops its 2 observations; the
+			// server observes again, so the new registration has exactly 2 (no duplicates)
+			LeshanClient second = startSensorClient(endpoint, scheduler);
+			try {
+				await().atMost(Duration.ofSeconds(10)).until(() -> {
+					Registration current = server.getRegistrationService().getByEndpoint(endpoint);
+					return current != null && !current.getId().equals(before.getId());
+				});
+				Registration after = server.getRegistrationService().getByEndpoint(endpoint);
+				awaitObservations(after, 2);
+				assertThat(events(e -> before.getId().equals(e.regId()) && e.event().equals("unregistered")))
+					.singleElement()
+					.satisfies(e -> {
+						assertThat(e.reason()).isEqualTo("replaced");
+						assertThat(e.observations()).isEqualTo(2);
+					});
+				assertThat(events(e -> after.getId().equals(e.regId()) && e.event().equals("observe_done")))
+					.hasSize(2);
+			}
+			finally {
+				second.destroy(true);
+			}
+		}
+		finally {
+			scheduler.shutdownNow();
+		}
+	}
+
+	private LeshanClient startSensorClient(String endpoint, ScheduledExecutorService scheduler) {
+		return startClient(endpoint, Security.noSec(localUri(Protocol.COAP_TCP), 123),
+				new JavaCoapTcpClientEndpointsProvider(), new ProbeSensorInstance(0, scheduler, 50),
+				new ProbeSensorInstance(1, scheduler, 50));
+	}
+
+	private void awaitObservations(Registration registration, int count) {
+		await().atMost(Duration.ofSeconds(5))
+			.until(() -> server.getObservationService().getObservations(registration).size() == count);
 	}
 
 	private List<SessionEvent> events(java.util.function.Predicate<SessionEvent> filter) throws IOException {

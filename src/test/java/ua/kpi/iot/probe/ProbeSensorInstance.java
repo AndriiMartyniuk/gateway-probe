@@ -11,7 +11,7 @@ import org.eclipse.leshan.core.node.LwM2mResource;
 import org.eclipse.leshan.core.response.ReadResponse;
 import org.eclipse.leshan.core.response.WriteResponse;
 
-import ua.kpi.iot.probe.lwm2m.ProbeSensor;
+import ua.kpi.iot.lwm2m.objects.ProbeSensor;
 
 /**
  * Device side of the Probe Sensor object for tests: produces a sample every {@code period} ms and notifies observers.
