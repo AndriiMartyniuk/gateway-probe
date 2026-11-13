@@ -22,12 +22,16 @@ import org.eclipse.leshan.servers.security.EditableSecurityStore;
 import org.eclipse.leshan.servers.security.InMemorySecurityStore;
 import org.eclipse.leshan.servers.security.NonUniqueSecurityInfoException;
 import org.eclipse.leshan.servers.security.SecurityInfo;
-import org.eclipse.leshan.transport.javacoap.server.coaptcp.endpoint.JavaCoapTcpServerEndpointsProvider;
-import org.eclipse.leshan.transport.javacoap.server.coaptcp.endpoint.JavaCoapsTcpServerEndpointsProvider;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.Resource;
+
+import ua.kpi.iot.probe.transport.CoapTcpServerEndpointsProvider;
+import ua.kpi.iot.probe.transport.CoapsTcpServerEndpointsProvider;
+import ua.kpi.iot.probe.transport.ConnectionEventListener;
+import ua.kpi.iot.probe.transport.LoggingConnectionEventListener;
+import ua.kpi.iot.probe.transport.TransportSettings;
 
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(Lwm2mServerProperties.class)
@@ -43,18 +47,25 @@ class Lwm2mServerConfiguration {
 	}
 
 	@Bean
-	LeshanServer leshanServer(Lwm2mServerProperties properties, EditableSecurityStore securityStore)
-			throws IOException, GeneralSecurityException {
+	ConnectionEventListener connectionEventListener() {
+		return new LoggingConnectionEventListener();
+	}
+
+	@Bean
+	LeshanServer leshanServer(Lwm2mServerProperties properties, EditableSecurityStore securityStore,
+			ConnectionEventListener connectionEvents) throws IOException, GeneralSecurityException {
 		LeshanServerBuilder builder = new LeshanServerBuilder();
 		builder.setObjectModelProvider(new VersionedModelProvider(ObjectLoader.loadAllDefault()));
 		builder.setSecurityStore(securityStore);
 
-		// Replace Leshan's default UDP (Californium) endpoints with CoAP over TCP / TLS (java-coap + Netty).
+		// Replace Leshan's default UDP (Californium) endpoints with CoAP over TCP / TLS on our own Netty transport.
 		List<LwM2mServerEndpointsProvider> endpoints = new ArrayList<>();
+		TransportSettings transport = properties.transport().toSettings();
 
 		Lwm2mServerProperties.Tcp tcp = properties.tcp();
 		if (tcp.enabled()) {
-			endpoints.add(new JavaCoapTcpServerEndpointsProvider(new InetSocketAddress(tcp.host(), tcp.port())));
+			endpoints.add(new CoapTcpServerEndpointsProvider(new InetSocketAddress(tcp.host(), tcp.port()), transport,
+					connectionEvents));
 		}
 
 		Lwm2mServerProperties.Tls tls = properties.tls();
@@ -68,7 +79,8 @@ class Lwm2mServerConfiguration {
 			}
 			builder.setCertificateChain(Arrays.copyOf(chain, chain.length, X509Certificate[].class));
 			builder.setTrustedCertificates(loadCertificates(tls.trustedCertificates()));
-			endpoints.add(new JavaCoapsTcpServerEndpointsProvider(new InetSocketAddress(tls.host(), tls.port())));
+			endpoints.add(new CoapsTcpServerEndpointsProvider(new InetSocketAddress(tls.host(), tls.port()), transport,
+					connectionEvents));
 		}
 
 		if (endpoints.isEmpty()) {

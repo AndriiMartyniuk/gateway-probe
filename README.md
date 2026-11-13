@@ -33,7 +33,7 @@ Testcontainers (Redis) for tests.
 ## Current state: basic Leshan server
 
 An embedded Leshan LwM2M server starts and stops with the Spring context (`SmartLifecycle`). Leshan's default UDP
-endpoints are replaced by:
+endpoints are replaced by CoAP over TCP and CoAP over TLS endpoints running on **our own Netty transport**:
 
 | Endpoint | URI | Property prefix |
 |---|---|---|
@@ -42,10 +42,41 @@ endpoints are replaced by:
 
 TLS devices must present a certificate signed by a CA in `trusted-certificates`, with CN = endpoint name, and the
 endpoint must be listed in `probe.lwm2m.tls.x509-endpoints` (Leshan `InMemorySecurityStore`). Registrations are only
-logged. There are no metrics or custom policies yet.
+logged.
 
-Code: `src/main/java/ua/kpi/iot/probe/lwm2m/` (`Lwm2mServerProperties`, `Lwm2mServerConfiguration`,
-`Lwm2mServerLifecycle`).
+Code: `src/main/java/ua/kpi/iot/probe/lwm2m/` (Spring wiring) and `src/main/java/ua/kpi/iot/probe/transport/`
+(transport).
+
+### Transport
+
+Leshan's `NettyCoapTcpTransport` is not usable for measurements: its pipeline is private (no hooks), it runs all
+connections on **one** Netty thread with `SO_BACKLOG` 100, and its single-promise receive drops packets if more than one
+thread decodes. `NettyCoapTcpServerTransport` replaces it; Leshan still handles LwM2M (registration, observe, security),
+and its public codec/context classes are reused.
+
+| | Leshan transport | `NettyCoapTcpServerTransport` |
+|---|---|---|
+| I/O + TLS handshake threads | 1 | `probe.lwm2m.transport.io-threads` (0 = 2 × CPUs) |
+| Accept backlog | 100 | `backlog` (default 1024) |
+| Idle timeout / handshake timeout | disabled / Netty default | `idle-timeout`, `tls-handshake-timeout` |
+| Hand-off to java-coap | promise completed on the I/O thread | queue + one dispatch thread (java-coap's `CoapServer` processes one packet at a time) |
+| Lifecycle events | none | `ConnectionEventListener` |
+| Thread shutdown on stop | no | yes |
+
+`ConnectionEventListener` events (called on I/O threads, must not block):
+
+| Event | Data |
+|---|---|
+| `onAccepted` | connection id, remote address, tls flag |
+| `onTlsHandshake` | duration since accept, **resumed** (abbreviated handshake) or full, failure cause |
+| `onEstablished` | connection is ready for CoAP (after the handshake for TLS) |
+| `onClosed` | reason (`PEER_CLOSED`, `TLS_HANDSHAKE_FAILED`, `IDLE_TIMEOUT`, `ERROR`, `SERVER_CLOSED`, `SERVER_SHUTDOWN`), lifetime |
+
+The default listener (`LoggingConnectionEventListener`) logs at DEBUG:
+`--logging.level.ua.kpi.iot.probe.transport=DEBUG`. Metrics will be another listener.
+
+Known limit (by design of java-coap): CoAP request processing is single-threaded per listener. The queue depth
+(`NettyCoapTcpServerTransport#inboundQueueSize`) shows when it becomes the bottleneck.
 
 ## Run
 
@@ -75,11 +106,12 @@ The image is built by the multi-stage `Dockerfile` (Temurin 25 JDK → JRE, non-
 Spring MVC on port 8080. Exposed actuator endpoints: `/actuator/health` (with details, incl. Redis),
 `/actuator/health/liveness`, `/actuator/health/readiness` (used by the compose health check), `/actuator/info`.
 
-Tests (`./gradlew test`, Docker and `openssl` required) start the app on random ports and register a real Leshan
-client over each transport.
+Tests (`./gradlew test`, Docker and `openssl` required) start the app on random ports and use real Leshan clients:
+registration over TCP and TLS, the connection event sequence, a failed TLS handshake, and 20 devices registering in
+parallel over TLS with 4 I/O threads.
 
 ## Notes
 
 - Leshan's TCP/TLS transport is labelled *experimental* by Leshan; the TLS endpoint supports X.509 only (no PSK/RPK).
-- Netty is aligned to the Spring Boot BOM version (4.2.x); Leshan/java-coap are compiled against an older 4.x line.
-  The tests pass, but keep this in mind if transport issues appear.
+- Netty is aligned to the Spring Boot BOM version (4.2.x); our transport uses the 4.2 API
+  (`MultiThreadIoEventLoopGroup`). Leshan's codec classes are compiled against an older 4.x line; tests pass.
