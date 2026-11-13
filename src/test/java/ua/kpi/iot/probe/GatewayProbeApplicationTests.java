@@ -37,10 +37,15 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
-import org.springframework.context.annotation.Primary;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+import tools.jackson.databind.json.JsonMapper;
+import ua.kpi.iot.probe.telemetry.JsonlSessionEventLog;
+import ua.kpi.iot.probe.telemetry.SessionEvent;
 import ua.kpi.iot.probe.transport.CloseReason;
 import ua.kpi.iot.probe.transport.ConnectionEventListener;
 
@@ -74,6 +79,8 @@ class GatewayProbeApplicationTests {
 		registry.add("probe.lwm2m.tls.x509-endpoints", () -> String.join(",", TLS_ENDPOINTS));
 		// several I/O threads: packets of different connections are decoded concurrently
 		registry.add("probe.lwm2m.transport.io-threads", () -> 4);
+		registry.add("probe.event-log.enabled", () -> true);
+		registry.add("probe.event-log.directory", () -> CERTS.resolve("event-logs").toString());
 	}
 
 	@Autowired
@@ -81,6 +88,15 @@ class GatewayProbeApplicationTests {
 
 	@Autowired
 	RecordingListener recorder;
+
+	@Autowired
+	MeterRegistry meters;
+
+	@Autowired
+	JsonlSessionEventLog eventLog;
+
+	@Autowired
+	JsonMapper json;
 
 	@BeforeEach
 	void clearEvents() {
@@ -114,6 +130,61 @@ class GatewayProbeApplicationTests {
 			.containsExactly("accepted", "tls-ok", "established", "closed");
 		assertThat(recorder.first("tls-ok").resumed()).isFalse();
 		assertThat(recorder.first("closed").reason()).isEqualTo(CloseReason.PEER_CLOSED);
+	}
+
+	@Test
+	void recordsMetricsAndSessionEventLog() throws IOException {
+		double acceptedBefore = counter("probe.connections.accepted", "transport", "tls");
+		long handshakesBefore = timerCount("probe.tls.handshake", "outcome", "success");
+		long registerLatencyBefore = timerCount("probe.lwm2m.register.latency", "transport", "tls");
+
+		LeshanClient client = startClient(TLS_DEVICE, tlsSecurity(TLS_DEVICE), new JavaCoapsTcpClientEndpointsProvider());
+		try {
+			awaitRegistered(TLS_DEVICE);
+			assertThat(meters.get("probe.lwm2m.registrations.active").gauge().value()).isGreaterThanOrEqualTo(1);
+			assertThat(meters.get("probe.connections.established").tag("transport", "tls").gauge().value())
+				.isGreaterThanOrEqualTo(1);
+		}
+		finally {
+			client.destroy(true);
+		}
+		awaitEvent("closed");
+
+		assertThat(counter("probe.connections.accepted", "transport", "tls")).isEqualTo(acceptedBefore + 1);
+		assertThat(timerCount("probe.tls.handshake", "outcome", "success")).isEqualTo(handshakesBefore + 1);
+		assertThat(timerCount("probe.lwm2m.register.latency", "transport", "tls")).isEqualTo(registerLatencyBefore + 1);
+		assertThat(meters.get("probe.connections.closed").tags("transport", "tls", "reason", "PEER_CLOSED").counter()
+			.count()).isGreaterThanOrEqualTo(1);
+
+		// event log: the same connection id appears on transport and LwM2M events
+		String conn = recorder.first("accepted").connectionId();
+		await().atMost(Duration.ofSeconds(5))
+			.until(() -> sessionEvents(conn).stream().anyMatch(e -> e.event().equals("closed")));
+		List<SessionEvent> session = sessionEvents(conn);
+		assertThat(session).extracting(SessionEvent::event)
+			.containsExactly("accepted", "tls_handshake", "established", "registered", "unregistered", "closed");
+		SessionEvent registered = session.get(3);
+		assertThat(registered.ep()).isEqualTo(TLS_DEVICE);
+		assertThat(registered.ms()).isNotNull().isPositive();
+		assertThat(session.get(4).reason()).isEqualTo("deregistered");
+		assertThat(session.get(5).ep()).isEqualTo(TLS_DEVICE);
+	}
+
+	private List<SessionEvent> sessionEvents(String conn) throws IOException {
+		return Files.readAllLines(eventLog.file())
+			.stream()
+			.map(line -> json.readValue(line, SessionEvent.class))
+			.filter(e -> conn.equals(e.conn()))
+			.toList();
+	}
+
+	private double counter(String name, String tag, String value) {
+		Counter counter = meters.find(name).tag(tag, value).counter();
+		return counter == null ? 0 : counter.count();
+	}
+
+	private long timerCount(String name, String tag, String value) {
+		return meters.find(name).tag(tag, value).timers().stream().mapToLong(Timer::count).sum();
 	}
 
 	@Test
@@ -204,12 +275,11 @@ class GatewayProbeApplicationTests {
 		}
 	}
 
-	/** Replaces the logging listener with one that records events. */
+	/** Adds a listener that records transport events next to the real ones. */
 	@TestConfiguration(proxyBeanMethods = false)
 	static class RecordingEventsConfiguration {
 
 		@Bean
-		@Primary
 		RecordingListener recordingListener() {
 			return new RecordingListener();
 		}
@@ -234,7 +304,7 @@ class GatewayProbeApplicationTests {
 		}
 
 		@Override
-		public void onEstablished(ConnectionInfo c) {
+		public void onEstablished(ConnectionInfo c, Duration sinceAccept) {
 			events.add(new Event("established", c.id(), c.tls(), false, null));
 		}
 

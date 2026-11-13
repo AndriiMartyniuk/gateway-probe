@@ -22,8 +22,11 @@ public interface ConnectionEventListener {
 	default void onTlsHandshake(ConnectionInfo connection, Duration duration, boolean resumed, Throwable failure) {
 	}
 
-	/** Connection is ready for CoAP traffic (immediately after accept for TCP, after the handshake for TLS). */
-	default void onEstablished(ConnectionInfo connection) {
+	/**
+	 * Connection is ready for CoAP traffic (immediately after accept for TCP, after the handshake for TLS).
+	 * @param sinceAccept time from TCP accept to this point
+	 */
+	default void onEstablished(ConnectionInfo connection, Duration sinceAccept) {
 	}
 
 	/**

@@ -27,8 +27,8 @@ public class LoggingConnectionEventListener implements ConnectionEventListener {
 	}
 
 	@Override
-	public void onEstablished(ConnectionInfo connection) {
-		log.debug("[{}] established", connection.id());
+	public void onEstablished(ConnectionInfo connection, Duration sinceAccept) {
+		log.debug("[{}] established {} ms after accept", connection.id(), sinceAccept.toMillis());
 	}
 
 	@Override

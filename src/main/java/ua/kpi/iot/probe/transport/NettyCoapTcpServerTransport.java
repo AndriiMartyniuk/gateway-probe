@@ -290,7 +290,7 @@ public class NettyCoapTcpServerTransport implements CoapTcpTransport {
 			handshakeStartedAt = System.currentTimeMillis();
 			events.onAccepted(info(ctx.channel()));
 			if (sslContext == null) {
-				events.onEstablished(info(ctx.channel()));
+				events.onEstablished(info(ctx.channel()), Duration.ZERO);
 				super.channelActive(ctx);
 			}
 		}
@@ -303,8 +303,10 @@ public class NettyCoapTcpServerTransport implements CoapTcpTransport {
 					SSLSession session = channel.pipeline().get(SslHandler.class).engine().getSession();
 					// A resumed session keeps the creation time of the original full handshake.
 					boolean resumed = session.getCreationTime() < handshakeStartedAt;
-					events.onTlsHandshake(info(channel), sinceAccept(channel), resumed, null);
-					events.onEstablished(info(channel));
+					// read the clock once: for TLS, "handshake done" and "established" are the same instant
+					Duration sinceAccept = sinceAccept(channel);
+					events.onTlsHandshake(info(channel), sinceAccept, resumed, null);
+					events.onEstablished(info(channel), sinceAccept);
 					super.channelActive(ctx);
 				}
 				else {

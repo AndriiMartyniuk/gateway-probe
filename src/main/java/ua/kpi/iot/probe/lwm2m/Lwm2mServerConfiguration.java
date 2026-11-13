@@ -18,6 +18,8 @@ import org.eclipse.leshan.server.LeshanServer;
 import org.eclipse.leshan.server.LeshanServerBuilder;
 import org.eclipse.leshan.server.endpoint.LwM2mServerEndpointsProvider;
 import org.eclipse.leshan.server.model.VersionedModelProvider;
+import org.eclipse.leshan.server.observation.ObservationListener;
+import org.eclipse.leshan.server.registration.RegistrationListener;
 import org.eclipse.leshan.servers.security.EditableSecurityStore;
 import org.eclipse.leshan.servers.security.InMemorySecurityStore;
 import org.eclipse.leshan.servers.security.NonUniqueSecurityInfoException;
@@ -29,6 +31,7 @@ import org.springframework.core.io.Resource;
 
 import ua.kpi.iot.probe.transport.CoapTcpServerEndpointsProvider;
 import ua.kpi.iot.probe.transport.CoapsTcpServerEndpointsProvider;
+import ua.kpi.iot.probe.transport.CompositeConnectionEventListener;
 import ua.kpi.iot.probe.transport.ConnectionEventListener;
 import ua.kpi.iot.probe.transport.LoggingConnectionEventListener;
 import ua.kpi.iot.probe.transport.TransportSettings;
@@ -53,7 +56,9 @@ class Lwm2mServerConfiguration {
 
 	@Bean
 	LeshanServer leshanServer(Lwm2mServerProperties properties, EditableSecurityStore securityStore,
-			ConnectionEventListener connectionEvents) throws IOException, GeneralSecurityException {
+			List<ConnectionEventListener> connectionListeners, List<RegistrationListener> registrationListeners,
+			List<ObservationListener> observationListeners) throws IOException, GeneralSecurityException {
+		ConnectionEventListener connectionEvents = new CompositeConnectionEventListener(connectionListeners);
 		LeshanServerBuilder builder = new LeshanServerBuilder();
 		builder.setObjectModelProvider(new VersionedModelProvider(ObjectLoader.loadAllDefault()));
 		builder.setSecurityStore(securityStore);
@@ -87,7 +92,10 @@ class Lwm2mServerConfiguration {
 			throw new IllegalStateException("Enable at least one of probe.lwm2m.tcp / probe.lwm2m.tls");
 		}
 		builder.setEndpointsProviders(endpoints);
-		return builder.build();
+		LeshanServer server = builder.build();
+		registrationListeners.forEach(server.getRegistrationService()::addListener);
+		observationListeners.forEach(server.getObservationService()::addListener);
+		return server;
 	}
 
 	@Bean

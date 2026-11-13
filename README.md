@@ -72,8 +72,67 @@ and its public codec/context classes are reused.
 | `onEstablished` | connection is ready for CoAP (after the handshake for TLS) |
 | `onClosed` | reason (`PEER_CLOSED`, `TLS_HANDSHAKE_FAILED`, `IDLE_TIMEOUT`, `ERROR`, `SERVER_CLOSED`, `SERVER_SHUTDOWN`), lifetime |
 
-The default listener (`LoggingConnectionEventListener`) logs at DEBUG:
-`--logging.level.ua.kpi.iot.probe.transport=DEBUG`. Metrics will be another listener.
+Every `ConnectionEventListener` bean receives these events (`CompositeConnectionEventListener`).
+`LoggingConnectionEventListener` logs them at DEBUG: `--logging.level.ua.kpi.iot.probe.transport=DEBUG`.
+
+### Telemetry: metrics and per-session event log
+
+`SessionTelemetry` (`src/main/java/ua/kpi/iot/probe/telemetry/`) listens to the transport *and* to Leshan
+(registrations, observations). It joins a registration to its connection by the device's remote address, so the
+registration latency is measured from TLS completion on the same connection. It publishes to two sinks:
+
+```
+transport events ──┐                     ┌─► ProbeMetrics ──► /actuator/prometheus   (live, aggregated)
+Leshan registration├─► SessionTelemetry ─┤
+Leshan observation ┘                     └─► SessionEventLog ─► event-logs/*.jsonl   (raw, per session)
+```
+
+**Micrometer metrics** (`/actuator/prometheus`):
+
+| Metric | Type | Tags |
+|---|---|---|
+| `probe_connections_accepted_total` | counter | `transport` |
+| `probe_connections_open` | gauge (accepted, not closed) | `transport` |
+| `probe_connections_established` | gauge (ready for CoAP, not closed) | `transport` |
+| `probe_connections_closed_total` | counter | `transport`, `reason` |
+| `probe_connections_lifetime_seconds` | timer | `transport` |
+| `probe_tls_handshake_seconds` | timer + histogram | `outcome`, `resumed` |
+| `probe_lwm2m_register_latency_seconds` | timer + histogram (established → registered) | `transport` |
+| `probe_lwm2m_registrations_total` | counter | `event` = registered / updated / deregistered / expired / replaced |
+| `probe_lwm2m_registrations_active` | gauge | — |
+| `probe_lwm2m_observations_total` | counter | `event` = created / cancelled / error |
+| `probe_lwm2m_notifications_total` | counter | — |
+| `probe_transport_dispatch_queue` | gauge (packets waiting for the java-coap thread) | `transport` |
+
+Plus the standard JVM / process / executor metrics from Spring Boot Actuator.
+
+**Per-session event log** (experiment tooling, off by default): one JSON object per line, written by a background
+thread so I/O threads never wait on disk; no event is dropped.
+
+```bash
+./gradlew bootRun --args='--probe.event-log.enabled=true'      # -> event-logs/events-<start>-<pid>.jsonl
+PROBE_EVENT_LOG_ENABLED=true docker compose up -d              # -> ./event-logs (mounted)
+```
+
+```json
+{"t":1794607341412397,"event":"accepted","conn":"c843772e","transport":"tls"}
+{"t":1794607341511893,"event":"tls_handshake","conn":"c843772e","transport":"tls","ms":97.777125,"resumed":false}
+{"t":1794607341512018,"event":"established","conn":"c843772e","transport":"tls","ms":97.777125}
+{"t":1794607341518123,"event":"closed","conn":"c843772e","transport":"tls","ms":106.162041,"reason":"PEER_CLOSED"}
+```
+
+(Format example from a single `openssl s_client` connection on a cold JVM — not a measurement.)
+
+| Field | Meaning |
+|---|---|
+| `t` | wall clock, µs since epoch (ordering, aligning with other sources) |
+| `event` | `accepted`, `tls_handshake`, `established`, `closed`, `registered`, `updated`, `unregistered`, `observation_created`, `observation_cancelled`, `observation_error`, `notification` |
+| `conn` / `ep` | connection id / LwM2M endpoint (joins transport and LwM2M events) |
+| `ms` | duration from a monotonic clock: since accept (`tls_handshake`, `established`), lifetime (`closed`), since established (`registered`) |
+| `resumed`, `reason`, `regId`, `path`, `observations` | event-specific |
+
+Options: `probe.event-log.directory` (default `event-logs`, git-ignored), `probe.event-log.notifications`
+(log every notification; default `false`). Copy the files of a run to `experiments/<exp>/raw/<run>/`.
 
 Known limit (by design of java-coap): CoAP request processing is single-threaded per listener. The queue depth
 (`NettyCoapTcpServerTransport#inboundQueueSize`) shows when it becomes the bottleneck.

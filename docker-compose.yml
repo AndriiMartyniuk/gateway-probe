@@ -21,6 +21,7 @@ services:
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
       PROBE_LWM2M_TLS_ENABLED: ${PROBE_LWM2M_TLS_ENABLED:-true}
+      PROBE_EVENT_LOG_ENABLED: ${PROBE_EVENT_LOG_ENABLED:-false}
     ports:
       - "5683:5683"   # coap+tcp
       - "5684:5684"   # coaps+tcp
@@ -33,3 +34,4 @@ services:
       retries: 5
     volumes:
       - ./certs:/app/certs:ro
+      - ./event-logs:/app/event-logs
