@@ -14,6 +14,8 @@ import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
@@ -23,9 +25,14 @@ import org.eclipse.leshan.client.endpoint.LwM2mClientEndpointsProvider;
 import org.eclipse.leshan.client.object.Device;
 import org.eclipse.leshan.client.object.Security;
 import org.eclipse.leshan.client.object.Server;
+import org.eclipse.leshan.client.resource.BaseInstanceEnablerFactory;
+import org.eclipse.leshan.client.resource.LwM2mInstanceEnabler;
 import org.eclipse.leshan.client.resource.ObjectsInitializer;
 import org.eclipse.leshan.core.LwM2mId;
 import org.eclipse.leshan.core.endpoint.Protocol;
+import org.eclipse.leshan.core.model.ObjectLoader;
+import org.eclipse.leshan.core.model.ObjectModel;
+import org.eclipse.leshan.core.model.StaticModel;
 import org.eclipse.leshan.core.request.BindingMode;
 import org.eclipse.leshan.server.LeshanServer;
 import org.eclipse.leshan.transport.javacoap.client.coaptcp.endpoint.JavaCoapTcpClientEndpointsProvider;
@@ -44,6 +51,7 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import tools.jackson.databind.json.JsonMapper;
+import ua.kpi.iot.probe.lwm2m.ProbeSensor;
 import ua.kpi.iot.probe.telemetry.JsonlSessionEventLog;
 import ua.kpi.iot.probe.telemetry.SessionEvent;
 import ua.kpi.iot.probe.transport.CloseReason;
@@ -188,6 +196,74 @@ class GatewayProbeApplicationTests {
 	}
 
 	@Test
+	void observesProbeSensorAfterRegisterAndTracksSequence() throws IOException {
+		String endpoint = "sensor-device";
+		double missingBefore = counter("probe.lwm2m.notifications.missing");
+		ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+		ProbeSensorInstance[] sensors = { new ProbeSensorInstance(0, scheduler, 50),
+				new ProbeSensorInstance(1, scheduler, 50), new ProbeSensorInstance(2, scheduler, 50) };
+		LeshanClient client = startClient(endpoint, Security.noSec(localUri(Protocol.COAP_TCP), 123),
+				new JavaCoapTcpClientEndpointsProvider(), sensors);
+		try {
+			awaitRegistered(endpoint);
+			String regId = server.getRegistrationService().getByEndpoint(endpoint).getId();
+
+			// one Observe per announced instance, answered by the device
+			await().atMost(Duration.ofSeconds(10))
+				.until(() -> events(e -> regId.equals(e.regId()) && e.event().equals("observe_done")).size() == 3);
+			assertThat(events(e -> regId.equals(e.regId()) && e.event().equals("observe_done")))
+				.allSatisfy(e -> assertThat(e.reason()).isNull())
+				.extracting(SessionEvent::path)
+				.containsExactlyInAnyOrder("/32700/0", "/32700/1", "/32700/2");
+			assertThat(server.getObservationService().getObservations(server.getRegistrationService()
+				.getByEndpoint(endpoint))).hasSize(3);
+
+			// notifications carry sample time: data age is recorded
+			await().atMost(Duration.ofSeconds(5))
+				.until(() -> timerCount("probe.lwm2m.notification.age") >= 9);
+
+			// a skipped range of sequence numbers is reported as a gap of that size
+			sensors[1].skip(5);
+			await().atMost(Duration.ofSeconds(5))
+				.until(() -> counter("probe.lwm2m.notifications.missing") >= missingBefore + 5);
+			assertThat(events(e -> regId.equals(e.regId()) && "gap".equals(e.reason()))).singleElement()
+				.extracting(SessionEvent::path)
+				.isEqualTo("/32700/1");
+			assertThat(counter("probe.lwm2m.notifications.duplicate")).isZero();
+		}
+		finally {
+			client.destroy(true);
+			scheduler.shutdownNow();
+		}
+
+		// order within the session: registered, then observe_sent before each observe_done
+		String regId = events(e -> endpoint.equals(e.ep()) && e.event().equals("registered")).getFirst().regId();
+		List<String> order = events(e -> regId.equals(e.regId())).stream()
+			.map(SessionEvent::event)
+			.filter(t -> t.startsWith("observe") || t.equals("registered"))
+			.toList();
+		assertThat(order.getFirst()).isEqualTo("registered");
+		assertThat(order.indexOf("observe_sent")).isLessThan(order.indexOf("observe_done"));
+	}
+
+	private List<SessionEvent> events(java.util.function.Predicate<SessionEvent> filter) throws IOException {
+		return Files.readAllLines(eventLog.file())
+			.stream()
+			.map(line -> json.readValue(line, SessionEvent.class))
+			.filter(filter)
+			.toList();
+	}
+
+	private double counter(String name) {
+		Counter counter = meters.find(name).counter();
+		return counter == null ? 0 : counter.count();
+	}
+
+	private long timerCount(String name) {
+		return meters.find(name).timers().stream().mapToLong(Timer::count).sum();
+	}
+
+	@Test
 	void reportsFailedTlsHandshake() throws IOException {
 		try (Socket socket = new Socket("localhost", port(Protocol.COAPS_TCP))) {
 			OutputStream out = socket.getOutputStream();
@@ -243,8 +319,20 @@ class GatewayProbeApplicationTests {
 	}
 
 	private static LeshanClient startClient(String endpoint, Security security,
-			LwM2mClientEndpointsProvider transport) {
-		ObjectsInitializer objects = new ObjectsInitializer();
+			LwM2mClientEndpointsProvider transport, ProbeSensorInstance... sensors) {
+		List<ObjectModel> models = new ArrayList<>(ObjectLoader.loadAllDefault());
+		models.addAll(ProbeSensor.models());
+		ObjectsInitializer objects = new ObjectsInitializer(new StaticModel(models));
+		if (sensors.length > 0) {
+			objects.setInstancesForObject(ProbeSensor.OBJECT_ID, sensors);
+			// Leshan needs a factory for multi-instance objects (server-side Create); tests never create instances
+			objects.setFactoryForObject(ProbeSensor.OBJECT_ID, new BaseInstanceEnablerFactory() {
+				@Override
+				public LwM2mInstanceEnabler create() {
+					throw new UnsupportedOperationException("Create of Probe Sensor instances is not supported");
+				}
+			});
+		}
 		objects.setInstancesForObject(LwM2mId.SECURITY, security);
 		objects.setInstancesForObject(LwM2mId.SERVER,
 				new Server(123, 300, EnumSet.of(BindingMode.T), false, BindingMode.T));

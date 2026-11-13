@@ -14,6 +14,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import org.eclipse.leshan.core.model.ObjectLoader;
+import org.eclipse.leshan.core.model.ObjectModel;
 import org.eclipse.leshan.server.LeshanServer;
 import org.eclipse.leshan.server.LeshanServerBuilder;
 import org.eclipse.leshan.server.endpoint.LwM2mServerEndpointsProvider;
@@ -24,11 +25,15 @@ import org.eclipse.leshan.servers.security.EditableSecurityStore;
 import org.eclipse.leshan.servers.security.InMemorySecurityStore;
 import org.eclipse.leshan.servers.security.NonUniqueSecurityInfoException;
 import org.eclipse.leshan.servers.security.SecurityInfo;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 import org.springframework.core.io.Resource;
 
+import ua.kpi.iot.probe.telemetry.SessionTelemetry;
 import ua.kpi.iot.probe.transport.CoapTcpServerEndpointsProvider;
 import ua.kpi.iot.probe.transport.CoapsTcpServerEndpointsProvider;
 import ua.kpi.iot.probe.transport.CompositeConnectionEventListener;
@@ -37,7 +42,7 @@ import ua.kpi.iot.probe.transport.LoggingConnectionEventListener;
 import ua.kpi.iot.probe.transport.TransportSettings;
 
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties(Lwm2mServerProperties.class)
+@EnableConfigurationProperties({ Lwm2mServerProperties.class, ObserveProperties.class })
 class Lwm2mServerConfiguration {
 
 	@Bean
@@ -60,7 +65,9 @@ class Lwm2mServerConfiguration {
 			List<ObservationListener> observationListeners) throws IOException, GeneralSecurityException {
 		ConnectionEventListener connectionEvents = new CompositeConnectionEventListener(connectionListeners);
 		LeshanServerBuilder builder = new LeshanServerBuilder();
-		builder.setObjectModelProvider(new VersionedModelProvider(ObjectLoader.loadAllDefault()));
+		List<ObjectModel> models = new ArrayList<>(ObjectLoader.loadAllDefault());
+		models.addAll(ProbeSensor.models());
+		builder.setObjectModelProvider(new VersionedModelProvider(models));
 		builder.setSecurityStore(securityStore);
 
 		// Replace Leshan's default UDP (Californium) endpoints with CoAP over TCP / TLS on our own Netty transport.
@@ -96,6 +103,14 @@ class Lwm2mServerConfiguration {
 		registrationListeners.forEach(server.getRegistrationService()::addListener);
 		observationListeners.forEach(server.getObservationService()::addListener);
 		return server;
+	}
+
+	/** Runs after {@code SessionTelemetry} so "registered" is recorded before "observe_sent". */
+	@Bean
+	@Order(Ordered.LOWEST_PRECEDENCE)
+	ObservationProvisioner observationProvisioner(ObjectProvider<LeshanServer> server, ObserveProperties properties,
+			SessionTelemetry telemetry) {
+		return new ObservationProvisioner(server, properties, telemetry);
 	}
 
 	@Bean

@@ -32,7 +32,7 @@ public class JsonlSessionEventLog implements SessionEventLog, SmartLifecycle {
 	private static final Logger log = LoggerFactory.getLogger(JsonlSessionEventLog.class);
 
 	private static final SessionEvent POISON = new SessionEvent(0, "", null, null, null, null, null, null, null, null,
-			null);
+			null, null);
 
 	private final Path file;
 

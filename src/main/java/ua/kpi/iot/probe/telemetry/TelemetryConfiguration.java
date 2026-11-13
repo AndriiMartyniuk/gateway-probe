@@ -10,6 +10,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.Ordered;
+import org.springframework.core.annotation.Order;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
@@ -44,6 +46,7 @@ class TelemetryConfiguration {
 	}
 
 	@Bean
+	@Order(Ordered.HIGHEST_PRECEDENCE)
 	SessionTelemetry sessionTelemetry(ProbeMetrics metrics, SessionEventLog eventLog) {
 		return new SessionTelemetry(metrics, eventLog);
 	}

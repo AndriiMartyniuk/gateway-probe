@@ -75,6 +75,43 @@ and its public codec/context classes are reused.
 Every `ConnectionEventListener` bean receives these events (`CompositeConnectionEventListener`).
 `LoggingConnectionEventListener` logs them at DEBUG: `--logging.level.ua.kpi.iot.probe.transport=DEBUG`.
 
+### Probe Sensor object and server-initiated observations
+
+Over TCP an observation exists only as long as its connection (RFC 8323), so after every Register the server has to
+create the observations again. `ObservationProvisioner` does this: for each instance of the objects in
+`probe.observe.object-ids` that the device lists in its registration, it sends one Observe, asynchronously, so the
+CoAP dispatch thread never waits for the device.
+
+The observed object is our own **Probe Sensor** (`src/main/resources/models/32700.xml`, `ProbeSensor`):
+
+| ID | Resource | Type | Purpose |
+|---|---|---|---|
+| 0 | Sequence Number | Integer, R | +1 per sample: gaps = lost notifications, repeats = duplicates |
+| 1 | Sample Time | Integer (ms since epoch), R | data age = server receive time − sample time |
+| 2 | Value | Float, R | the synthetic measurement |
+| 3 | Payload | Opaque, R | filler of Payload Size bytes, to control notification size |
+| 4 | Sample Period | Integer (ms), RW | sampling rate; 0 stops |
+| 5 | Payload Size | Integer (B), RW | size of resource 3 |
+
+- Multiple instances: *m* instances = *m* independent streams = *m* observations per device.
+- Object ID **32700**: private research object (`Source` 2), in the OMNA x-label range 26241–32768, not registered in
+  the OMNA `lwm2m-registry` when chosen (2026-11). Not for production use.
+- Sample Time is an Integer in milliseconds on purpose: the LwM2M `Time` type has one-second resolution.
+- Data age compares the device clock with the server clock; it is meaningful when both run on one host or are
+  synchronised (NTP), and negative ages are not recorded in the histogram.
+- The device side for tests is `src/test/java/ua/kpi/iot/probe/ProbeSensorInstance.java`; `fleet-emulator` will need
+  the same model file and an equivalent implementation.
+
+Observation metrics (in addition to the table below): `probe_lwm2m_observe_latency_seconds{outcome}` (Observe sent →
+device response), `probe_lwm2m_notification_age_seconds`, `probe_lwm2m_notifications_missing_total`,
+`probe_lwm2m_notifications_duplicate_total`. Event log: `observe_sent`, `observe_done` (`ms` = latency, `reason` on
+failure), and `notification` lines with `seq` and `ms` = data age. Notifications are logged only with
+`probe.event-log.notifications=true`, **except** out-of-sequence ones (`reason` = `gap` / `duplicate`), which are
+always logged.
+
+Options: `probe.observe.enabled` (default `true`), `probe.observe.object-ids` (default `32700`),
+`probe.observe.timeout` (default `10s`).
+
 ### Telemetry: metrics and per-session event log
 
 `SessionTelemetry` (`src/main/java/ua/kpi/iot/probe/telemetry/`) listens to the transport *and* to Leshan
@@ -166,8 +203,9 @@ Spring MVC on port 8080. Exposed actuator endpoints: `/actuator/health` (with de
 `/actuator/health/liveness`, `/actuator/health/readiness` (used by the compose health check), `/actuator/info`.
 
 Tests (`./gradlew test`, Docker and `openssl` required) start the app on random ports and use real Leshan clients:
-registration over TCP and TLS, the connection event sequence, a failed TLS handshake, and 20 devices registering in
-parallel over TLS with 4 I/O threads.
+registration over TCP and TLS, the connection event sequence, a failed TLS handshake, 20 devices registering in
+parallel over TLS with 4 I/O threads, metrics and event log contents, and server-initiated observation of three Probe
+Sensor instances including detection of a deliberately skipped sequence range.
 
 ## Notes
 

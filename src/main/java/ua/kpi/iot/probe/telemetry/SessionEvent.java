@@ -16,10 +16,11 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * @param regId Leshan registration id
  * @param path observed LwM2M path(s)
  * @param observations number of observations affected (e.g. dropped with a registration)
+ * @param seq sample sequence number (Probe Sensor notifications)
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record SessionEvent(long t, String event, String conn, String ep, String transport, Double ms, Boolean resumed,
-		String reason, String regId, String path, Integer observations) {
+		String reason, String regId, String path, Integer observations, Long seq) {
 
 	/** Event types written to the log. */
 	public static final class Type {
@@ -45,6 +46,12 @@ public record SessionEvent(long t, String event, String conn, String ep, String 
 		/** Registration removed; {@code reason} = deregistered | expired | replaced. */
 		public static final String UNREGISTERED = "unregistered";
 
+		/** Server sent Observe (after Register). */
+		public static final String OBSERVE_SENT = "observe_sent";
+
+		/** Observe answered; {@code ms} = since observe_sent, {@code reason} set on failure. */
+		public static final String OBSERVE_DONE = "observe_done";
+
 		/** Observation established. */
 		public static final String OBSERVATION_CREATED = "observation_created";
 
@@ -54,7 +61,10 @@ public record SessionEvent(long t, String event, String conn, String ep, String 
 		/** Observation failed. */
 		public static final String OBSERVATION_ERROR = "observation_error";
 
-		/** Notification received (only when enabled). */
+		/**
+		 * Notification received (only when enabled); for Probe Sensor: {@code seq}, {@code ms} = data age (server
+		 * receive time - device sample time, wall clocks), {@code reason} = gap | duplicate when out of sequence.
+		 */
 		public static final String NOTIFICATION = "notification";
 
 		private Type() {

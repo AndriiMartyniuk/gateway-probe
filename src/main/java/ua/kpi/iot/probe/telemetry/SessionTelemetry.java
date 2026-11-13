@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
+import org.eclipse.leshan.core.node.LwM2mPath;
 import org.eclipse.leshan.core.observation.CompositeObservation;
 import org.eclipse.leshan.core.observation.Observation;
 import org.eclipse.leshan.core.observation.SingleObservation;
@@ -18,6 +19,7 @@ import org.eclipse.leshan.server.registration.Registration;
 import org.eclipse.leshan.server.registration.RegistrationListener;
 import org.eclipse.leshan.server.registration.RegistrationUpdate;
 
+import ua.kpi.iot.probe.lwm2m.ProbeSensor;
 import ua.kpi.iot.probe.transport.CloseReason;
 import ua.kpi.iot.probe.transport.ConnectionEventListener;
 
@@ -37,6 +39,9 @@ public class SessionTelemetry implements ConnectionEventListener, RegistrationLi
 
 	/** Open connections by remote address. */
 	private final Map<InetSocketAddress, Connection> connections = new ConcurrentHashMap<>();
+
+	/** Last Probe Sensor sequence number per registration id and observed path. */
+	private final Map<String, Map<String, Long>> lastSequence = new ConcurrentHashMap<>();
 
 	public SessionTelemetry(ProbeMetrics metrics, SessionEventLog eventLog) {
 		this.metrics = metrics;
@@ -134,6 +139,7 @@ public class SessionTelemetry implements ConnectionEventListener, RegistrationLi
 			Registration newReg) {
 		String reason = newReg != null ? "replaced" : expired ? "expired" : "deregistered";
 		metrics.registration(reason);
+		lastSequence.remove(registration.getId());
 		Connection connection = find(registration.getSocketAddress());
 		log(SessionEvent.Type.UNREGISTERED, connection != null ? connection.id : null, registration.getEndpoint(),
 				null, null, null, reason, registration.getId(), null, observations != null ? observations.size() : 0);
@@ -144,6 +150,10 @@ public class SessionTelemetry implements ConnectionEventListener, RegistrationLi
 	@Override
 	public void newObservation(Observation observation, Registration registration) {
 		metrics.observation("created");
+		String path = path(observation);
+		if (path != null) {
+			lastSequence.computeIfAbsent(observation.getRegistrationId(), id -> new ConcurrentHashMap<>()).remove(path);
+		}
 		logObservation(SessionEvent.Type.OBSERVATION_CREATED, observation, registration, null);
 	}
 
@@ -155,7 +165,42 @@ public class SessionTelemetry implements ConnectionEventListener, RegistrationLi
 
 	@Override
 	public void onResponse(SingleObservation observation, Registration registration, ObserveResponse response) {
-		notification(observation, registration);
+		metrics.notification();
+		ProbeSensor.Sample sample = observation.getPath().getObjectId() == ProbeSensor.OBJECT_ID
+				? ProbeSensor.Sample.from(response.getContent()) : null;
+		if (sample == null) {
+			if (eventLog.logsNotifications()) {
+				logObservation(SessionEvent.Type.NOTIFICATION, observation, registration, null);
+			}
+			return;
+		}
+		Duration age = Duration.between(sample.sampleTime(), Instant.now());
+		if (!age.isNegative()) {
+			metrics.notificationAge(age);
+		}
+		String sequenceStatus = checkSequence(observation, sample.sequence());
+		if (eventLog.logsNotifications() || sequenceStatus != null) {
+			Connection connection = find(registration.getSocketAddress());
+			eventLog.append(new SessionEvent(nowMicros(), SessionEvent.Type.NOTIFICATION,
+					connection != null ? connection.id : null, registration.getEndpoint(), null, millis(age), null,
+					sequenceStatus, registration.getId(), path(observation), null, sample.sequence()));
+		}
+	}
+
+	/** @return {@code null} if in sequence, otherwise "gap" or "duplicate" */
+	private String checkSequence(SingleObservation observation, long sequence) {
+		Map<String, Long> streams = lastSequence.computeIfAbsent(observation.getRegistrationId(),
+				id -> new ConcurrentHashMap<>());
+		Long previous = streams.put(path(observation), sequence);
+		if (previous == null || sequence == previous + 1) {
+			return null;
+		}
+		if (sequence <= previous) {
+			metrics.notificationDuplicate();
+			return "duplicate";
+		}
+		metrics.notificationsMissing(sequence - previous - 1);
+		return "gap";
 	}
 
 	@Override
@@ -177,6 +222,26 @@ public class SessionTelemetry implements ConnectionEventListener, RegistrationLi
 		}
 	}
 
+	// ---- server-initiated observe (called by ObservationProvisioner) -------------------------------------------
+
+	/** The server sent Observe for {@code path} after a registration. */
+	public void observeSent(Registration registration, LwM2mPath path) {
+		Connection connection = find(registration.getSocketAddress());
+		log(SessionEvent.Type.OBSERVE_SENT, connection != null ? connection.id : null, registration.getEndpoint(), null,
+				null, null, null, registration.getId(), path.toString(), null);
+	}
+
+	/**
+	 * The device answered (or failed to answer) the Observe.
+	 * @param failure {@code null} on success, otherwise the error or response code
+	 */
+	public void observeCompleted(Registration registration, LwM2mPath path, Duration latency, String failure) {
+		metrics.observeLatency(failure == null, latency);
+		Connection connection = find(registration.getSocketAddress());
+		log(SessionEvent.Type.OBSERVE_DONE, connection != null ? connection.id : null, registration.getEndpoint(), null,
+				millis(latency), null, failure, registration.getId(), path.toString(), null);
+	}
+
 	private void logObservation(String type, Observation observation, Registration registration, String error) {
 		Connection connection = registration != null ? find(registration.getSocketAddress()) : null;
 		log(type, connection != null ? connection.id : null, registration != null ? registration.getEndpoint() : null,
@@ -192,7 +257,7 @@ public class SessionTelemetry implements ConnectionEventListener, RegistrationLi
 	private void log(String type, String conn, String endpoint, String transport, Double ms, Boolean resumed,
 			String reason, String regId, String path, Integer observations) {
 		eventLog.append(new SessionEvent(nowMicros(), type, conn, endpoint, transport, ms, resumed, reason, regId, path,
-				observations));
+				observations, null));
 	}
 
 	private static String path(Observation observation) {

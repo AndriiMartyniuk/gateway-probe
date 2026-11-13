@@ -104,6 +104,37 @@ public class ProbeMetrics {
 		Counter.builder("probe.lwm2m.notifications").description("Notifications received").register(registry).increment();
 	}
 
+	void observeLatency(boolean success, Duration latency) {
+		Timer.builder("probe.lwm2m.observe.latency")
+			.description("Time from sending Observe (after Register) to the device's response")
+			.tag("outcome", success ? "success" : "failure")
+			.publishPercentileHistogram()
+			.register(registry)
+			.record(latency);
+	}
+
+	void notificationAge(Duration age) {
+		Timer.builder("probe.lwm2m.notification.age")
+			.description("Data age at receipt: server receive time minus device sample time (wall clocks)")
+			.publishPercentileHistogram()
+			.register(registry)
+			.record(age);
+	}
+
+	void notificationsMissing(long count) {
+		Counter.builder("probe.lwm2m.notifications.missing")
+			.description("Samples skipped in a stream's sequence numbers (lost notifications)")
+			.register(registry)
+			.increment(count);
+	}
+
+	void notificationDuplicate() {
+		Counter.builder("probe.lwm2m.notifications.duplicate")
+			.description("Notifications whose sequence number was not greater than the previous one")
+			.register(registry)
+			.increment();
+	}
+
 	/** Gauge backed by a supplier, e.g. queue depth or active registrations. */
 	public <T> void gauge(String name, String description, Iterable<Tag> tags, T obj,
 			ToDoubleFunction<T> value) {
