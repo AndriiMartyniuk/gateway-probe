@@ -21,6 +21,7 @@ import org.eclipse.leshan.server.registration.RegistrationUpdate;
 
 import ua.kpi.iot.lwm2m.objects.ProbeSensor;
 import ua.kpi.iot.probe.transport.CloseReason;
+import ua.kpi.iot.probe.transport.CoapMessageKind;
 import ua.kpi.iot.probe.transport.ConnectionEventListener;
 
 /**
@@ -80,8 +81,13 @@ public class SessionTelemetry implements ConnectionEventListener, RegistrationLi
 	@Override
 	public void onTlsHandshake(ConnectionInfo c, Duration duration, boolean resumed, Throwable failure) {
 		metrics.tlsHandshake(duration, resumed, failure == null);
-		log(SessionEvent.Type.TLS_HANDSHAKE, c.id(), null, transport(c), millis(duration), resumed,
-				failure == null ? null : failure.toString(), null, null, null);
+		Traffic traffic = c.traffic();
+		if (failure == null) {
+			metrics.tlsHandshakeTraffic(resumed, traffic.bytesIn(), traffic.bytesOut(), traffic.handshakeFlights());
+		}
+		eventLog.append(new SessionEvent(nowMicros(), SessionEvent.Type.TLS_HANDSHAKE, c.id(), null, transport(c),
+				millis(duration), resumed, failure == null ? null : failure.toString(), null, null, null, null,
+				traffic.bytesIn(), traffic.bytesOut(), traffic.handshakeFlights(), null, null, null));
 	}
 
 	@Override
@@ -100,8 +106,23 @@ public class SessionTelemetry implements ConnectionEventListener, RegistrationLi
 		Connection connection = c.remoteAddress() != null ? connections.remove(c.remoteAddress()) : null;
 		boolean wasEstablished = connection != null && connection.establishedAt != 0;
 		metrics.closed(transport(c), reason.name(), wasEstablished, lifetime);
-		log(SessionEvent.Type.CLOSED, c.id(), connection != null ? connection.endpoint : null, transport(c),
-				millis(lifetime), null, reason.name(), null, null, null);
+		Traffic traffic = c.traffic();
+		metrics.connectionTraffic(transport(c), traffic.bytesIn(), traffic.bytesOut());
+		eventLog.append(new SessionEvent(nowMicros(), SessionEvent.Type.CLOSED, c.id(),
+				connection != null ? connection.endpoint : null, transport(c), millis(lifetime), null, reason.name(),
+				null, null, null, null, traffic.bytesIn(), traffic.bytesOut(), null, null, null, null));
+	}
+
+	@Override
+	public void onCoapMessage(ConnectionInfo c, Direction direction, CoapMessageKind kind, int size) {
+		String dir = direction == Direction.IN ? "in" : "out";
+		metrics.coapMessage(dir, kind.name(), size);
+		if (eventLog.logsCoapMessages()) {
+			Connection connection = find(c.remoteAddress());
+			eventLog.append(new SessionEvent(nowMicros(), SessionEvent.Type.COAP_MESSAGE, c.id(),
+					connection != null ? connection.endpoint : null, transport(c), null, null, null, null, null, null,
+					null, null, null, null, dir, kind.name(), size));
+		}
 	}
 
 	// ---- LwM2M registrations -----------------------------------------------------------------------------------
@@ -183,7 +204,8 @@ public class SessionTelemetry implements ConnectionEventListener, RegistrationLi
 			Connection connection = find(registration.getSocketAddress());
 			eventLog.append(new SessionEvent(nowMicros(), SessionEvent.Type.NOTIFICATION,
 					connection != null ? connection.id : null, registration.getEndpoint(), null, millis(age), null,
-					sequenceStatus, registration.getId(), path(observation), null, sample.sequence()));
+					sequenceStatus, registration.getId(), path(observation), null, sample.sequence(), null, null, null,
+					null, null, null));
 		}
 	}
 
@@ -257,7 +279,7 @@ public class SessionTelemetry implements ConnectionEventListener, RegistrationLi
 	private void log(String type, String conn, String endpoint, String transport, Double ms, Boolean resumed,
 			String reason, String regId, String path, Integer observations) {
 		eventLog.append(new SessionEvent(nowMicros(), type, conn, endpoint, transport, ms, resumed, reason, regId, path,
-				observations, null));
+				observations, null, null, null, null, null, null, null));
 	}
 
 	private static String path(Observation observation) {

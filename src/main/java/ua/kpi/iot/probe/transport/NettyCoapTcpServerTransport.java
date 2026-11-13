@@ -243,8 +243,10 @@ public class NettyCoapTcpServerTransport implements CoapTcpTransport {
 	}
 
 	private static ConnectionEventListener.ConnectionInfo info(Channel channel) {
+		TrafficCounter traffic = channel.attr(TrafficCounter.KEY).get();
 		return new ConnectionEventListener.ConnectionInfo(channel.id().asShortText(),
-				(InetSocketAddress) channel.remoteAddress(), channel.pipeline().get(SslHandler.class) != null);
+				(InetSocketAddress) channel.remoteAddress(), channel.pipeline().get(SslHandler.class) != null,
+				traffic != null ? traffic.snapshot() : ConnectionEventListener.Traffic.NONE);
 	}
 
 	private static Duration sinceAccept(Channel channel) {
@@ -256,6 +258,7 @@ public class NettyCoapTcpServerTransport implements CoapTcpTransport {
 
 		@Override
 		protected void initChannel(SocketChannel ch) {
+			ch.pipeline().addLast("traffic", new TrafficCounter());
 			if (sslContext != null) {
 				SslHandler ssl = sslContext.newHandler(ch.alloc());
 				ssl.setHandshakeTimeoutMillis(settings.tlsHandshakeTimeout().toMillis());
@@ -270,6 +273,7 @@ public class NettyCoapTcpServerTransport implements CoapTcpTransport {
 			}
 			ch.pipeline().addLast("decoder", new CoapTcpDecoder());
 			ch.pipeline().addLast("encoder", new CoapTcpEncoder(contextMatcher));
+			ch.pipeline().addLast("classifier", new CoapMessageClassifier(events, NettyCoapTcpServerTransport::info));
 			ch.pipeline().addLast("dispatch", new DispatchHandler());
 			ch.pipeline().addLast("errors", new CloseOnErrorHandler());
 		}
@@ -288,6 +292,13 @@ public class NettyCoapTcpServerTransport implements CoapTcpTransport {
 		public void channelActive(ChannelHandlerContext ctx) throws Exception {
 			ctx.channel().attr(ACCEPTED_AT).set(System.nanoTime());
 			handshakeStartedAt = System.currentTimeMillis();
+			if (sslContext == null) {
+				// no handshake on plain TCP: nothing to count as flights
+				TrafficCounter traffic = ctx.channel().attr(TrafficCounter.KEY).get();
+				if (traffic != null) {
+					traffic.handshakeDone();
+				}
+			}
 			events.onAccepted(info(ctx.channel()));
 			if (sslContext == null) {
 				events.onEstablished(info(ctx.channel()), Duration.ZERO);
@@ -299,6 +310,10 @@ public class NettyCoapTcpServerTransport implements CoapTcpTransport {
 		public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
 			if (evt instanceof SslHandshakeCompletionEvent handshake) {
 				Channel channel = ctx.channel();
+				TrafficCounter traffic = channel.attr(TrafficCounter.KEY).get();
+				if (traffic != null) {
+					traffic.handshakeDone();
+				}
 				if (handshake.isSuccess()) {
 					SSLSession session = channel.pipeline().get(SslHandler.class).engine().getSession();
 					// A resumed session keeps the creation time of the original full handshake.

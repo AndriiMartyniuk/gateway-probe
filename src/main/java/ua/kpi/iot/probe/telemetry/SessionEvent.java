@@ -17,10 +17,17 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * @param path observed LwM2M path(s)
  * @param observations number of observations affected (e.g. dropped with a registration)
  * @param seq sample sequence number (Probe Sensor notifications)
+ * @param bytesIn wire bytes received on the connection so far ({@code tls_handshake}, {@code closed})
+ * @param bytesOut wire bytes sent on the connection so far
+ * @param flights TLS handshake flights (changes of direction until the handshake completed)
+ * @param dir {@code in} (device to server) or {@code out}, for {@code coap_message}
+ * @param kind CoAP message kind, for {@code coap_message}
+ * @param bytes serialised CoAP-over-TCP size of the message, for {@code coap_message}
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record SessionEvent(long t, String event, String conn, String ep, String transport, Double ms, Boolean resumed,
-		String reason, String regId, String path, Integer observations, Long seq) {
+		String reason, String regId, String path, Integer observations, Long seq, Long bytesIn, Long bytesOut,
+		Integer flights, String dir, String kind, Integer bytes) {
 
 	/** Event types written to the log. */
 	public static final class Type {
@@ -60,6 +67,9 @@ public record SessionEvent(long t, String event, String conn, String ep, String 
 
 		/** Observation failed. */
 		public static final String OBSERVATION_ERROR = "observation_error";
+
+		/** One CoAP message (only with {@code probe.event-log.coap-messages=true}): {@code dir}, {@code kind}, {@code bytes}. */
+		public static final String COAP_MESSAGE = "coap_message";
 
 		/**
 		 * Notification received (only when enabled); for Probe Sensor: {@code seq}, {@code ms} = data age (server

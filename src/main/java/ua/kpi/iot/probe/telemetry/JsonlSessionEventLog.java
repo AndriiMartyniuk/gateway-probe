@@ -32,11 +32,13 @@ public class JsonlSessionEventLog implements SessionEventLog, SmartLifecycle {
 	private static final Logger log = LoggerFactory.getLogger(JsonlSessionEventLog.class);
 
 	private static final SessionEvent POISON = new SessionEvent(0, "", null, null, null, null, null, null, null, null,
-			null, null);
+			null, null, null, null, null, null, null, null);
 
 	private final Path file;
 
 	private final boolean notifications;
+
+	private final boolean coapMessages;
 
 	private final JsonMapper json;
 
@@ -46,9 +48,10 @@ public class JsonlSessionEventLog implements SessionEventLog, SmartLifecycle {
 
 	private volatile Thread writer;
 
-	public JsonlSessionEventLog(Path file, boolean notifications, JsonMapper json) {
+	public JsonlSessionEventLog(Path file, boolean notifications, boolean coapMessages, JsonMapper json) {
 		this.file = file;
 		this.notifications = notifications;
+		this.coapMessages = coapMessages;
 		this.json = json;
 	}
 
@@ -60,6 +63,11 @@ public class JsonlSessionEventLog implements SessionEventLog, SmartLifecycle {
 	@Override
 	public boolean logsNotifications() {
 		return notifications;
+	}
+
+	@Override
+	public boolean logsCoapMessages() {
+		return coapMessages;
 	}
 
 	public Path file() {

@@ -41,8 +41,36 @@ public interface ConnectionEventListener {
 	 * @param id Netty channel id (short form), unique per connection
 	 * @param remoteAddress device address; may be {@code null} if the socket was already gone
 	 * @param tls whether the connection is TLS
+	 * @param traffic bytes and handshake flights up to the moment of the event
 	 */
-	record ConnectionInfo(String id, InetSocketAddress remoteAddress, boolean tls) {
+	record ConnectionInfo(String id, InetSocketAddress remoteAddress, boolean tls, Traffic traffic) {
+	}
+
+	/**
+	 * Bytes on the wire so far (TCP payload: includes TLS records and handshake) and TLS handshake flights.
+	 *
+	 * @param handshakeFlights changes of direction until the TLS handshake completed (0 for plain TCP)
+	 */
+	record Traffic(long bytesIn, long bytesOut, int handshakeFlights) {
+
+		public static final Traffic NONE = new Traffic(0, 0, 0);
+
+	}
+
+	enum Direction {
+
+		/** Device to server. */
+		IN,
+		/** Server to device. */
+		OUT
+
+	}
+
+	/**
+	 * One CoAP message.
+	 * @param size serialised CoAP-over-TCP size in bytes (without TLS record overhead), -1 if unknown
+	 */
+	default void onCoapMessage(ConnectionInfo connection, Direction direction, CoapMessageKind kind, int size) {
 	}
 
 	ConnectionEventListener NO_OP = new ConnectionEventListener() {

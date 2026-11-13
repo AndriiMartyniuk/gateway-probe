@@ -7,6 +7,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.ToDoubleFunction;
 
 import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tag;
@@ -102,6 +103,40 @@ public class ProbeMetrics {
 
 	void notification() {
 		Counter.builder("probe.lwm2m.notifications").description("Notifications received").register(registry).increment();
+	}
+
+	void tlsHandshakeTraffic(boolean resumed, long bytesIn, long bytesOut, int flights) {
+		bytes("probe.tls.handshake.bytes", "Wire bytes of a successful TLS handshake (TCP accept to completion)",
+				Tags.of("direction", "in", "resumed", Boolean.toString(resumed)), bytesIn);
+		bytes("probe.tls.handshake.bytes", "Wire bytes of a successful TLS handshake (TCP accept to completion)",
+				Tags.of("direction", "out", "resumed", Boolean.toString(resumed)), bytesOut);
+		DistributionSummary.builder("probe.tls.handshake.flights")
+			.description("Flights (changes of direction) of a successful TLS handshake")
+			.tag("resumed", Boolean.toString(resumed))
+			.register(registry)
+			.record(flights);
+	}
+
+	void connectionTraffic(String transport, long bytesIn, long bytesOut) {
+		bytes("probe.connections.bytes", "Wire bytes per connection, recorded at close",
+				Tags.of("transport", transport, "direction", "in"), bytesIn);
+		bytes("probe.connections.bytes", "Wire bytes per connection, recorded at close",
+				Tags.of("transport", transport, "direction", "out"), bytesOut);
+	}
+
+	void coapMessage(String direction, String kind, int size) {
+		bytes("probe.coap.messages",
+				"CoAP messages by direction and kind; size = serialised CoAP-over-TCP bytes (no TLS record overhead)",
+				Tags.of("direction", direction, "kind", kind), Math.max(size, 0));
+	}
+
+	private void bytes(String name, String description, Tags tags, long value) {
+		DistributionSummary.builder(name)
+			.description(description)
+			.baseUnit("bytes")
+			.tags(tags)
+			.register(registry)
+			.record(value);
 	}
 
 	void observeLatency(boolean success, Duration latency) {

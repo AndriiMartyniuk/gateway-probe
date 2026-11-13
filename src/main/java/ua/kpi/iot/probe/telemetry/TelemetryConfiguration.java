@@ -36,7 +36,8 @@ class TelemetryConfiguration {
 		TelemetryProperties.EventLog config = properties.eventLog();
 		String name = "events-" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss")) + "-"
 				+ ProcessHandle.current().pid() + ".jsonl";
-		return new JsonlSessionEventLog(config.directory().resolve(name), config.notifications(), json);
+		return new JsonlSessionEventLog(config.directory().resolve(name), config.notifications(),
+				config.coapMessages(), json);
 	}
 
 	@Bean

@@ -38,6 +38,11 @@ public class CompositeConnectionEventListener implements ConnectionEventListener
 		each(l -> l.onClosed(connection, reason, lifetime));
 	}
 
+	@Override
+	public void onCoapMessage(ConnectionInfo connection, Direction direction, CoapMessageKind kind, int size) {
+		each(l -> l.onCoapMessage(connection, direction, kind, size));
+	}
+
 	private void each(Consumer<ConnectionEventListener> call) {
 		for (ConnectionEventListener listener : listeners) {
 			try {

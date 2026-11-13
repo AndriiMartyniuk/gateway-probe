@@ -179,6 +179,51 @@ Options: `probe.event-log.directory` (default `event-logs`, git-ignored), `probe
 Known limit (by design of java-coap): CoAP request processing is single-threaded per listener. The queue depth
 (`NettyCoapTcpServerTransport#inboundQueueSize`) shows when it becomes the bottleneck.
 
+### Wire traffic and CoAP messages per phase (E1)
+
+Two more pipeline handlers in the transport:
+
+- `TrafficCounter` (first, below TLS): wire bytes in/out per connection and, until the TLS handshake completes, the
+  number of **flights** (changes of direction).
+- `CoapMessageClassifier` (between codec and dispatcher): classifies every CoAP message in both directions —
+  `CSM`, `PING`/`PONG`, `REGISTER` / `REGISTER_RESPONSE`, `UPDATE…`, `DEREGISTER…`, `OBSERVE` (server → device),
+  `OBSERVE_RESPONSE`, `NOTIFICATION`, `OTHER_…` — matching responses to requests by token, with the serialised
+  CoAP-over-TCP size (without TLS record overhead).
+
+| Metric | Meaning |
+|---|---|
+| `probe_tls_handshake_bytes{direction,resumed}` | wire bytes of a successful handshake (accept → completion) |
+| `probe_tls_handshake_flights{resumed}` | flights of a successful handshake |
+| `probe_coap_messages_bytes{direction,kind}` | count and total size of CoAP messages by kind |
+| `probe_connections_bytes{transport,direction}` | wire bytes per connection, recorded at close |
+
+Event log: `tls_handshake` and `closed` carry `bytesIn`, `bytesOut` (and `flights`); with
+`probe.event-log.coap-messages=true` every CoAP message is a `coap_message` line with `dir`, `kind`, `bytes` (for
+single-session E1 runs; high volume).
+
+Smoke run (500 TLS devices from `fleet-emulator`, one laptop — not a measurement): full mutual-TLS 1.2 handshakes
+took 4 flights, resumed ones 3, as the protocol prescribes.
+
+### State placement (E2)
+
+`probe.state.placement`:
+
+- `IN_MEMORY` (default): Leshan's in-memory registration store; registrations and observations die with the
+  instance.
+- `REDIS`: Leshan's `RedisRegistrationStore` (`leshan-lwm2m-server-redis`) on the Redis of `spring.data.redis.*`;
+  registrations and observations survive the instance (`RedisStatePlacementTests` reads them back through a second
+  store). Keys look like `REG#EP#<endpoint>`, `OBS#OBSID#…`, `OBSIDS#REGID#…`, `LOCK#EP#…`.
+
+Leshan's Redis store is built against Jedis 4.4.6; the Spring Boot BOM brings Jedis 7.4.1. Register, observation
+storage and Deregister work on 7.4.1 (tests and smoke runs); the store's background expiration cleaning was not
+exercised yet.
+
+**Known issue (open):** under load with `REDIS`, a few Observe exchanges are lost: the device's response arrives, but
+java-coap logs `Can not process CoAP message … 205 … obs:1` and the request later times out (smoke runs with 500 TLS
+devices, 200/s, dropping 100: 3 and 111 failed Observes of 1200 in two runs; the same scenario with `IN_MEMORY`: 0 of
+1200). Not reproduced with 20 devices. Root cause not yet identified — suspected race between the response and
+Leshan's Redis write of the observation. Do not use `REDIS` results for observation recovery until resolved.
+
 ### Finding: connection loss without Deregister (Leshan 2.0.0-M18)
 
 Characterised by `connectionLossWithoutDeregisterLeavesStaleSessionUntilReRegister`:
@@ -229,8 +274,10 @@ Spring MVC on port 8080. Exposed actuator endpoints: `/actuator/health` (with de
 Tests (`./gradlew test`, Docker and `openssl` required) start the app on random ports and use real Leshan clients:
 registration over TCP and TLS (listed and unlisted CA-signed devices; a CN/endpoint mismatch is refused), the
 connection event sequence, a failed TLS handshake, 20 devices registering in
-parallel over TLS with 4 I/O threads, metrics and event log contents, and server-initiated observation of three Probe
-Sensor instances including detection of a deliberately skipped sequence range.
+parallel over TLS with 4 I/O threads, metrics and event log contents (incl. handshake bytes / flights and CoAP message
+classification), server-initiated observation of three Probe Sensor instances including detection of a deliberately
+skipped sequence range, connection loss without Deregister, and (`RedisStatePlacementTests`) state placement in
+Redis.
 
 ## Notes
 

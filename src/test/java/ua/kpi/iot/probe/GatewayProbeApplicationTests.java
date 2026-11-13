@@ -95,6 +95,7 @@ class GatewayProbeApplicationTests {
 		// several I/O threads: packets of different connections are decoded concurrently
 		registry.add("probe.lwm2m.transport.io-threads", () -> 4);
 		registry.add("probe.event-log.enabled", () -> true);
+		registry.add("probe.event-log.coap-messages", () -> true);
 		registry.add("probe.event-log.directory", () -> CERTS.resolve("event-logs").toString());
 	}
 
@@ -178,6 +179,20 @@ class GatewayProbeApplicationTests {
 		List<SessionEvent> session = sessionEvents(conn);
 		assertThat(session).extracting(SessionEvent::event)
 			.containsExactly("accepted", "tls_handshake", "established", "registered", "unregistered", "closed");
+		// wire traffic of the full TLS 1.2 handshake (mutual X.509)
+		SessionEvent handshake = session.get(1);
+		assertThat(handshake.bytesIn()).isPositive();
+		assertThat(handshake.bytesOut()).isPositive();
+		assertThat(handshake.flights()).isBetween(3, 4);
+		System.out.println("TRAFFIC full handshake: in=" + handshake.bytesIn() + " out=" + handshake.bytesOut()
+				+ " flights=" + handshake.flights());
+		// CoAP messages of the session, classified
+		List<String> messages = coapMessages(conn);
+		assertThat(messages).contains("in:CSM", "out:CSM", "in:REGISTER", "out:REGISTER_RESPONSE", "in:DEREGISTER",
+				"out:DEREGISTER_RESPONSE");
+		assertThat(messages.indexOf("in:REGISTER")).isLessThan(messages.indexOf("out:REGISTER_RESPONSE"));
+		SessionEvent closedEvent = session.get(session.size() - 1);
+		assertThat(closedEvent.bytesIn()).isGreaterThan(handshake.bytesIn());
 		SessionEvent registered = session.get(3);
 		assertThat(registered.ep()).isEqualTo(TLS_DEVICE);
 		assertThat(registered.ms()).isNotNull().isPositive();
@@ -189,7 +204,17 @@ class GatewayProbeApplicationTests {
 		return Files.readAllLines(eventLog.file())
 			.stream()
 			.map(line -> json.readValue(line, SessionEvent.class))
-			.filter(e -> conn.equals(e.conn()))
+			.filter(e -> conn.equals(e.conn()) && !e.event().equals("coap_message"))
+			.toList();
+	}
+
+	/** "dir:KIND" of every CoAP message of a connection, in order. */
+	private List<String> coapMessages(String conn) throws IOException {
+		return Files.readAllLines(eventLog.file())
+			.stream()
+			.map(line -> json.readValue(line, SessionEvent.class))
+			.filter(e -> conn.equals(e.conn()) && e.event().equals("coap_message"))
+			.map(e -> e.dir() + ":" + e.kind())
 			.toList();
 	}
 
@@ -251,6 +276,14 @@ class GatewayProbeApplicationTests {
 			.toList();
 		assertThat(order.getFirst()).isEqualTo("registered");
 		assertThat(order.indexOf("observe_sent")).isLessThan(order.indexOf("observe_done"));
+
+		// CoAP level: 3 Observe requests out, 3 responses in, then notifications
+		String conn = events(e -> regId.equals(e.regId()) && e.conn() != null).getFirst().conn();
+		List<String> messages = coapMessages(conn);
+		assertThat(messages.stream().filter("out:OBSERVE"::equals).count()).isEqualTo(3);
+		assertThat(messages.stream().filter("in:OBSERVE_RESPONSE"::equals).count()).isEqualTo(3);
+		assertThat(messages).contains("in:NOTIFICATION");
+		assertThat(messages.indexOf("in:OBSERVE_RESPONSE")).isLessThan(messages.indexOf("in:NOTIFICATION"));
 	}
 
 	/**

@@ -10,6 +10,11 @@ public interface SessionEventLog {
 		return false;
 	}
 
+	/** Whether every CoAP message is logged (high volume; for single-session cost measurements). */
+	default boolean logsCoapMessages() {
+		return false;
+	}
+
 	SessionEventLog DISABLED = event -> {
 	};
 

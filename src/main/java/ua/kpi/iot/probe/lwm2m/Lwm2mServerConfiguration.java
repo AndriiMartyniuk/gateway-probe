@@ -17,6 +17,7 @@ import org.eclipse.leshan.server.LeshanServer;
 import org.eclipse.leshan.server.LeshanServerBuilder;
 import org.eclipse.leshan.server.endpoint.LwM2mServerEndpointsProvider;
 import org.eclipse.leshan.server.model.VersionedModelProvider;
+import org.eclipse.leshan.server.redis.RedisRegistrationStore;
 import org.eclipse.leshan.server.security.DefaultAuthorizer;
 import org.eclipse.leshan.server.observation.ObservationListener;
 import org.eclipse.leshan.server.registration.RegistrationListener;
@@ -25,13 +26,17 @@ import org.eclipse.leshan.servers.security.InMemorySecurityStore;
 import org.eclipse.leshan.servers.security.NonUniqueSecurityInfoException;
 import org.eclipse.leshan.servers.security.SecurityInfo;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.data.redis.autoconfigure.DataRedisConnectionDetails;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.core.io.Resource;
 
+import redis.clients.jedis.JedisPool;
+import redis.clients.jedis.JedisPoolConfig;
 import ua.kpi.iot.lwm2m.objects.ProbeSensor;
 import ua.kpi.iot.probe.telemetry.SessionTelemetry;
 import ua.kpi.iot.probe.transport.CoapTcpServerEndpointsProvider;
@@ -42,7 +47,7 @@ import ua.kpi.iot.probe.transport.LoggingConnectionEventListener;
 import ua.kpi.iot.probe.transport.TransportSettings;
 
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties({ Lwm2mServerProperties.class, ObserveProperties.class })
+@EnableConfigurationProperties({ Lwm2mServerProperties.class, ObserveProperties.class, StateProperties.class })
 class Lwm2mServerConfiguration {
 
 	@Bean
@@ -59,14 +64,30 @@ class Lwm2mServerConfiguration {
 		return new LoggingConnectionEventListener();
 	}
 
+	/** Jedis pool for Leshan's Redis store, on the same Redis as {@code spring.data.redis.*} (or Testcontainers). */
+	@Bean(destroyMethod = "close")
+	@ConditionalOnProperty(name = "probe.state.placement", havingValue = "REDIS")
+	JedisPool lwm2mStateJedisPool(DataRedisConnectionDetails redis) {
+		DataRedisConnectionDetails.Standalone standalone = redis.getStandalone();
+		if (standalone == null) {
+			throw new IllegalStateException("probe.state.placement=REDIS needs a standalone Redis (spring.data.redis.host)");
+		}
+		return new JedisPool(new JedisPoolConfig(), standalone.getHost(), standalone.getPort(), 2_000,
+				redis.getUsername(), redis.getPassword(), standalone.getDatabase());
+	}
+
 	@Bean
-	LeshanServer leshanServer(Lwm2mServerProperties properties, EditableSecurityStore securityStore,
+	LeshanServer leshanServer(Lwm2mServerProperties properties, StateProperties state,
+			ObjectProvider<JedisPool> jedisPool, EditableSecurityStore securityStore,
 			List<ConnectionEventListener> connectionListeners, List<RegistrationListener> registrationListeners,
 			List<ObservationListener> observationListeners) throws IOException, GeneralSecurityException {
 		ConnectionEventListener connectionEvents = new CompositeConnectionEventListener(connectionListeners);
 		LeshanServerBuilder builder = new LeshanServerBuilder();
 		builder.setObjectModelProvider(new VersionedModelProvider(ProbeSensor.defaultModelsWithProbeSensor()));
 		builder.setSecurityStore(securityStore);
+		if (state.placement() == StateProperties.Placement.REDIS) {
+			builder.setRegistrationStore(new RedisRegistrationStore(jedisPool.getObject()));
+		}
 		if (properties.tls().acceptCaSignedDevices()) {
 			builder.setAuthorizer(new DefaultAuthorizer(securityStore, new CaSignedDeviceSecurityChecker()));
 		}
