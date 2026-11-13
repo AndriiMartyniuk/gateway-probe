@@ -22,6 +22,7 @@ val leshanVersion = "2.0.0-M18"
 
 dependencies {
 	implementation("org.springframework.boot:spring-boot-starter-actuator")
+	implementation("org.springframework.boot:spring-boot-starter-webmvc")
 	// Eclipse Leshan LwM2M server + CoAP over TCP/TLS transport (java-coap + Netty)
 	implementation("org.eclipse.leshan:leshan-lwm2m-server:$leshanVersion")
 	implementation("org.eclipse.leshan:leshan-tl-jc-server-coaptcp:$leshanVersion")
@@ -32,6 +33,7 @@ dependencies {
 	runtimeOnly("io.micrometer:micrometer-registry-prometheus")
 	annotationProcessor("org.springframework.boot:spring-boot-configuration-processor")
 	testImplementation("org.springframework.boot:spring-boot-starter-actuator-test")
+	testImplementation("org.springframework.boot:spring-boot-starter-webmvc-test")
 	testImplementation("org.springframework.boot:spring-boot-starter-data-redis-test")
 	testImplementation("org.springframework.boot:spring-boot-testcontainers")
 	testImplementation("org.testcontainers:testcontainers-junit-jupiter")

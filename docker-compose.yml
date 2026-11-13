@@ -4,7 +4,7 @@ services:
   redis:
     image: redis:8
     ports:
-      - "6379:6379"
+      - "${REDIS_HOST_PORT:-6379}:6379"   # host port only for debugging; the app uses the compose network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -24,5 +24,12 @@ services:
     ports:
       - "5683:5683"   # coap+tcp
       - "5684:5684"   # coaps+tcp
+      - "8080:8080"   # HTTP / actuator
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/actuator/health/readiness"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 5
     volumes:
       - ./certs:/app/certs:ro

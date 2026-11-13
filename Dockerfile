@@ -10,10 +10,11 @@ RUN --mount=type=cache,target=/root/.gradle ./gradlew --no-daemon bootJar -x tes
  && cp build/libs/*-SNAPSHOT.jar /app.jar
 
 FROM eclipse-temurin:25-jre
-RUN useradd --system --uid 10001 app
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/* \
+ && useradd --system --uid 10001 app
 WORKDIR /app
 COPY --from=build /app.jar app.jar
 USER app
-# 5683 CoAP over TCP, 5684 CoAP over TLS
-EXPOSE 5683 5684
+# 5683 CoAP over TCP, 5684 CoAP over TLS, 8080 HTTP (actuator)
+EXPOSE 5683 5684 8080
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]

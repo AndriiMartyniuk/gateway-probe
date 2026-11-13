@@ -67,7 +67,13 @@ docker compose down
 ```
 
 The image is built by the multi-stage `Dockerfile` (Temurin 25 JDK → JRE, non-root user). Ports: 5683 (coap+tcp),
-5684 (coaps+tcp), 6379 (Redis). TCP only: `PROBE_LWM2M_TLS_ENABLED=false docker compose up -d`.
+5684 (coaps+tcp), 8080 (HTTP / actuator), 6379 (Redis, debugging only). TCP only:
+`PROBE_LWM2M_TLS_ENABLED=false docker compose up -d`. If 6379 is taken on the host: `REDIS_HOST_PORT=6380 docker compose up -d`.
+
+### HTTP / actuator
+
+Spring MVC on port 8080. Exposed actuator endpoints: `/actuator/health` (with details, incl. Redis),
+`/actuator/health/liveness`, `/actuator/health/readiness` (used by the compose health check), `/actuator/info`.
 
 Tests (`./gradlew test`, Docker and `openssl` required) start the app on random ports and register a real Leshan
 client over each transport.
