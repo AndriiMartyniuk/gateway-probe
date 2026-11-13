@@ -79,7 +79,11 @@ class GatewayProbeApplicationTests {
 		.concat(Stream.of(TLS_DEVICE), PARALLEL_ENDPOINTS.stream())
 		.toList();
 
-	private static final Path CERTS = generateCerts(TLS_ENDPOINTS);
+	/** Has a CA-signed certificate but is not listed in the security store. */
+	private static final String UNLISTED_DEVICE = "unlisted-device";
+
+	private static final Path CERTS = generateCerts(
+			Stream.concat(TLS_ENDPOINTS.stream(), Stream.of(UNLISTED_DEVICE)).toList());
 
 	@DynamicPropertySource
 	static void lwm2mProperties(DynamicPropertyRegistry registry) {
@@ -332,6 +336,34 @@ class GatewayProbeApplicationTests {
 
 	private long timerCount(String name) {
 		return meters.find(name).timers().stream().mapToLong(Timer::count).sum();
+	}
+
+	@Test
+	void registersUnlistedDeviceWithCaSignedCertificate() {
+		LeshanClient client = startClient(UNLISTED_DEVICE, tlsSecurity(UNLISTED_DEVICE),
+				new JavaCoapsTcpClientEndpointsProvider());
+		try {
+			awaitRegistered(UNLISTED_DEVICE);
+		}
+		finally {
+			client.destroy(true);
+		}
+	}
+
+	@Test
+	void rejectsCertificateWhoseCommonNameIsNotTheEndpoint() throws Exception {
+		// "impostor" presents the (valid, CA-signed) certificate of unlisted-device
+		LeshanClient client = startClient("impostor", tlsSecurity(UNLISTED_DEVICE),
+				new JavaCoapsTcpClientEndpointsProvider());
+		try {
+			// the TLS handshake succeeds (the certificate is trusted), but Register is refused
+			awaitEvent("tls-ok");
+			Thread.sleep(2_000);
+			assertThat(server.getRegistrationService().getByEndpoint("impostor")).isNull();
+		}
+		finally {
+			client.destroy(false);
+		}
 	}
 
 	@Test

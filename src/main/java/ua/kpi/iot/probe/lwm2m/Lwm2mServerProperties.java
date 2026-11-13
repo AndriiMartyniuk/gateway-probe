@@ -46,12 +46,14 @@ public record Lwm2mServerProperties(@DefaultValue Tcp tcp, @DefaultValue Tls tls
 	 *
 	 * @param keyStore PKCS#12 key store with the server private key and certificate chain
 	 * @param trustedCertificates PEM file with CA certificate(s) used to verify device certificates
-	 * @param x509Endpoints endpoint names allowed to register over TLS with an X.509 certificate
+	 * @param x509Endpoints endpoint names registered in the security store for X.509 authentication
+	 * @param acceptCaSignedDevices also accept devices not in the security store if their certificate is signed by a
+	 * trusted CA and its CN equals the endpoint name (needed for large emulated fleets)
 	 */
 	public record Tls(@DefaultValue("true") boolean enabled, @DefaultValue("0.0.0.0") String host,
 			@DefaultValue("5684") int port, Resource keyStore, @DefaultValue("changeit") String keyStorePassword,
 			@DefaultValue("server") String keyAlias, Resource trustedCertificates,
-			@DefaultValue List<String> x509Endpoints) {
+			@DefaultValue List<String> x509Endpoints, @DefaultValue("true") boolean acceptCaSignedDevices) {
 	}
 
 }

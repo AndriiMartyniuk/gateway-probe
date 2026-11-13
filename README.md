@@ -40,9 +40,13 @@ endpoints are replaced by CoAP over TCP and CoAP over TLS endpoints running on *
 | CoAP over TCP | `coap+tcp://<host>:5683` | `probe.lwm2m.tcp.*` |
 | CoAP over TLS (TLS 1.2, mutual X.509) | `coaps+tcp://<host>:5684` | `probe.lwm2m.tls.*` |
 
-TLS devices must present a certificate signed by a CA in `trusted-certificates`, with CN = endpoint name, and the
-endpoint must be listed in `probe.lwm2m.tls.x509-endpoints` (Leshan `InMemorySecurityStore`). Registrations are only
-logged.
+TLS devices must present a certificate signed by a CA in `trusted-certificates`, with CN = endpoint name. Two ways
+to be accepted:
+
+- listed in `probe.lwm2m.tls.x509-endpoints` (Leshan `InMemorySecurityStore`, Leshan's own check), or
+- `probe.lwm2m.tls.accept-ca-signed-devices=true` (default): **any** device whose certificate chains to a trusted CA
+  and whose CN equals the endpoint name (`CaSignedDeviceSecurityChecker`). Needed for emulated fleets of thousands of
+  devices. A valid certificate presented under another endpoint name is refused (Register → 4.03).
 
 Code: `src/main/java/ua/kpi/iot/probe/lwm2m/` (Spring wiring) and `src/main/java/ua/kpi/iot/probe/transport/`
 (transport).
@@ -223,7 +227,8 @@ Spring MVC on port 8080. Exposed actuator endpoints: `/actuator/health` (with de
 `/actuator/health/liveness`, `/actuator/health/readiness` (used by the compose health check), `/actuator/info`.
 
 Tests (`./gradlew test`, Docker and `openssl` required) start the app on random ports and use real Leshan clients:
-registration over TCP and TLS, the connection event sequence, a failed TLS handshake, 20 devices registering in
+registration over TCP and TLS (listed and unlisted CA-signed devices; a CN/endpoint mismatch is refused), the
+connection event sequence, a failed TLS handshake, 20 devices registering in
 parallel over TLS with 4 I/O threads, metrics and event log contents, and server-initiated observation of three Probe
 Sensor instances including detection of a deliberately skipped sequence range.
 

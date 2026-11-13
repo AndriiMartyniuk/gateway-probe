@@ -17,6 +17,7 @@ import org.eclipse.leshan.server.LeshanServer;
 import org.eclipse.leshan.server.LeshanServerBuilder;
 import org.eclipse.leshan.server.endpoint.LwM2mServerEndpointsProvider;
 import org.eclipse.leshan.server.model.VersionedModelProvider;
+import org.eclipse.leshan.server.security.DefaultAuthorizer;
 import org.eclipse.leshan.server.observation.ObservationListener;
 import org.eclipse.leshan.server.registration.RegistrationListener;
 import org.eclipse.leshan.servers.security.EditableSecurityStore;
@@ -66,6 +67,9 @@ class Lwm2mServerConfiguration {
 		LeshanServerBuilder builder = new LeshanServerBuilder();
 		builder.setObjectModelProvider(new VersionedModelProvider(ProbeSensor.defaultModelsWithProbeSensor()));
 		builder.setSecurityStore(securityStore);
+		if (properties.tls().acceptCaSignedDevices()) {
+			builder.setAuthorizer(new DefaultAuthorizer(securityStore, new CaSignedDeviceSecurityChecker()));
+		}
 
 		// Replace Leshan's default UDP (Californium) endpoints with CoAP over TCP / TLS on our own Netty transport.
 		List<LwM2mServerEndpointsProvider> endpoints = new ArrayList<>();
