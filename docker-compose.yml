@@ -1,0 +1,28 @@
+# Local stand: gateway-probe + Redis.
+# TLS material must exist first: scripts/generate-dev-certs.sh  (or set PROBE_LWM2M_TLS_ENABLED=false)
+services:
+  redis:
+    image: redis:8
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  gateway-probe:
+    build: .
+    image: gateway-probe:local
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      PROBE_LWM2M_TLS_ENABLED: ${PROBE_LWM2M_TLS_ENABLED:-true}
+    ports:
+      - "5683:5683"   # coap+tcp
+      - "5684:5684"   # coaps+tcp
+    volumes:
+      - ./certs:/app/certs:ro

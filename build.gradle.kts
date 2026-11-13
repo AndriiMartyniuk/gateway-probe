@@ -18,8 +18,13 @@ repositories {
 	mavenCentral()
 }
 
+val leshanVersion = "2.0.0-M18"
+
 dependencies {
 	implementation("org.springframework.boot:spring-boot-starter-actuator")
+	// Eclipse Leshan LwM2M server + CoAP over TCP/TLS transport (java-coap + Netty)
+	implementation("org.eclipse.leshan:leshan-lwm2m-server:$leshanVersion")
+	implementation("org.eclipse.leshan:leshan-tl-jc-server-coaptcp:$leshanVersion")
 	// Netty version is managed by the Spring Boot BOM
 	implementation("io.netty:netty-handler")
 	implementation("io.netty:netty-codec")
@@ -30,6 +35,10 @@ dependencies {
 	testImplementation("org.springframework.boot:spring-boot-starter-data-redis-test")
 	testImplementation("org.springframework.boot:spring-boot-testcontainers")
 	testImplementation("org.testcontainers:testcontainers-junit-jupiter")
+	// Leshan client over CoAP over TCP/TLS, used only to verify registration in tests
+	testImplementation("org.awaitility:awaitility")
+	testImplementation("org.eclipse.leshan:leshan-lwm2m-client:$leshanVersion")
+	testImplementation("org.eclipse.leshan:leshan-tl-jc-client-coaptcp:$leshanVersion")
 	testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 

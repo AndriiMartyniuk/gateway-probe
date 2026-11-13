@@ -27,6 +27,53 @@ written directly on Netty.
 
 ## Stack
 
-Spring Boot 4.1, Netty, Spring Data Redis, Micrometer/Prometheus, Testcontainers (Redis) for tests.
+Spring Boot 4.1, Eclipse Leshan 2.0.0-M18 (java-coap + Netty transport), Spring Data Redis, Micrometer/Prometheus,
+Testcontainers (Redis) for tests.
 
-Status: empty skeleton.
+## Current state: basic Leshan server
+
+An embedded Leshan LwM2M server starts and stops with the Spring context (`SmartLifecycle`). Leshan's default UDP
+endpoints are replaced by:
+
+| Endpoint | URI | Property prefix |
+|---|---|---|
+| CoAP over TCP | `coap+tcp://<host>:5683` | `probe.lwm2m.tcp.*` |
+| CoAP over TLS (TLS 1.2, mutual X.509) | `coaps+tcp://<host>:5684` | `probe.lwm2m.tls.*` |
+
+TLS devices must present a certificate signed by a CA in `trusted-certificates`, with CN = endpoint name, and the
+endpoint must be listed in `probe.lwm2m.tls.x509-endpoints` (Leshan `InMemorySecurityStore`). Registrations are only
+logged. There are no metrics or custom policies yet.
+
+Code: `src/main/java/ua/kpi/iot/probe/lwm2m/` (`Lwm2mServerProperties`, `Lwm2mServerConfiguration`,
+`Lwm2mServerLifecycle`).
+
+## Run
+
+```bash
+export JAVA_HOME=$(/usr/libexec/java_home -v 25)
+scripts/generate-dev-certs.sh            # dev CA, server.p12, client cert for dev-device-1 -> ./certs (git-ignored)
+./gradlew bootRun
+```
+
+TCP only: `./gradlew bootRun --args='--probe.lwm2m.tls.enabled=false'`.
+
+### Docker Compose (app + Redis)
+
+```bash
+scripts/generate-dev-certs.sh            # mounted read-only into the container at /app/certs
+docker compose up -d --build
+docker compose logs -f gateway-probe
+docker compose down
+```
+
+The image is built by the multi-stage `Dockerfile` (Temurin 25 JDK → JRE, non-root user). Ports: 5683 (coap+tcp),
+5684 (coaps+tcp), 6379 (Redis). TCP only: `PROBE_LWM2M_TLS_ENABLED=false docker compose up -d`.
+
+Tests (`./gradlew test`, Docker and `openssl` required) start the app on random ports and register a real Leshan
+client over each transport.
+
+## Notes
+
+- Leshan's TCP/TLS transport is labelled *experimental* by Leshan; the TLS endpoint supports X.509 only (no PSK/RPK).
+- Netty is aligned to the Spring Boot BOM version (4.2.x); Leshan/java-coap are compiled against an older 4.x line.
+  The tests pass, but keep this in mind if transport issues appear.
