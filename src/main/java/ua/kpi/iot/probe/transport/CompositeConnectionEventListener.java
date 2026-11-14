@@ -39,8 +39,9 @@ public class CompositeConnectionEventListener implements ConnectionEventListener
 	}
 
 	@Override
-	public void onCoapMessage(ConnectionInfo connection, Direction direction, CoapMessageKind kind, int size) {
-		each(l -> l.onCoapMessage(connection, direction, kind, size));
+	public void onCoapMessage(ConnectionInfo connection, Direction direction, CoapMessageKind kind, int size,
+			String token) {
+		each(l -> l.onCoapMessage(connection, direction, kind, size, token));
 	}
 
 	private void each(Consumer<ConnectionEventListener> call) {

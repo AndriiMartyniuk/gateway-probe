@@ -32,7 +32,7 @@ dependencies {
 	// Eclipse Leshan LwM2M server + CoAP over TCP/TLS transport (java-coap + Netty)
 	implementation("org.eclipse.leshan:leshan-lwm2m-server:$leshanVersion")
 	implementation("org.eclipse.leshan:leshan-tl-jc-server-coaptcp:$leshanVersion")
-	// optional Redis placement of registrations and observations (probe.state.placement=redis); uses Jedis
+	// REDIS placement: Leshan's RedisRegistrationStore (Jedis); REDIS_CACHED reuses only its serialisers (Lettuce)
 	implementation("org.eclipse.leshan:leshan-lwm2m-server-redis:$leshanVersion")
 	implementation("ua.kpi.iot:lwm2m-objects:0.1.0-SNAPSHOT")
 	// Netty version is managed by the Spring Boot BOM

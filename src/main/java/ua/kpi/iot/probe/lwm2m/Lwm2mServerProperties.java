@@ -7,6 +7,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 import org.springframework.core.io.Resource;
 
+import ua.kpi.iot.probe.transport.DispatchMode;
 import ua.kpi.iot.probe.transport.TransportSettings;
 
 /**
@@ -24,13 +25,16 @@ public record Lwm2mServerProperties(@DefaultValue Tcp tcp, @DefaultValue Tls tls
 	 * @param backlog accept queue length
 	 * @param idleTimeout close connections idle for this long; 0 disables it
 	 * @param tlsHandshakeTimeout maximum TLS handshake duration
+	 * @param dispatch {@code SINGLE}: java-coap's single dispatch thread per listener; {@code VIRTUAL}: one mailbox per
+	 * connection drained by virtual threads (connections processed in parallel, each in order)
 	 */
 	public record Transport(@DefaultValue("1") int acceptThreads, @DefaultValue("0") int ioThreads,
 			@DefaultValue("1024") int backlog, @DefaultValue("0s") Duration idleTimeout,
-			@DefaultValue("10s") Duration tlsHandshakeTimeout) {
+			@DefaultValue("10s") Duration tlsHandshakeTimeout, @DefaultValue("SINGLE") DispatchMode dispatch) {
 
 		public TransportSettings toSettings() {
-			return new TransportSettings(acceptThreads, ioThreads, backlog, idleTimeout, tlsHandshakeTimeout);
+			return new TransportSettings(acceptThreads, ioThreads, backlog, idleTimeout, tlsHandshakeTimeout,
+					dispatch);
 		}
 
 	}

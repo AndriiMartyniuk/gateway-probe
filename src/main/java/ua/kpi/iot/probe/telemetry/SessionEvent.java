@@ -23,11 +23,12 @@ import com.fasterxml.jackson.annotation.JsonInclude;
  * @param dir {@code in} (device to server) or {@code out}, for {@code coap_message}
  * @param kind CoAP message kind, for {@code coap_message}
  * @param bytes serialised CoAP-over-TCP size of the message, for {@code coap_message}
+ * @param token CoAP token (hex), for {@code coap_message}
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record SessionEvent(long t, String event, String conn, String ep, String transport, Double ms, Boolean resumed,
 		String reason, String regId, String path, Integer observations, Long seq, Long bytesIn, Long bytesOut,
-		Integer flights, String dir, String kind, Integer bytes) {
+		Integer flights, String dir, String kind, Integer bytes, String token) {
 
 	/** Event types written to the log. */
 	public static final class Type {

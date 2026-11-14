@@ -10,9 +10,10 @@ import java.time.Duration;
  * @param backlog accept queue length ({@code SO_BACKLOG})
  * @param idleTimeout close a connection after this period without reads or writes; zero disables it
  * @param tlsHandshakeTimeout fail a TLS handshake that takes longer than this
+ * @param dispatch how decoded messages are handed to java-coap
  */
 public record TransportSettings(int acceptThreads, int ioThreads, int backlog, Duration idleTimeout,
-		Duration tlsHandshakeTimeout) {
+		Duration tlsHandshakeTimeout, DispatchMode dispatch) {
 
 	public TransportSettings {
 		if (acceptThreads < 1) {
@@ -27,7 +28,7 @@ public record TransportSettings(int acceptThreads, int ioThreads, int backlog, D
 	}
 
 	public static TransportSettings defaults() {
-		return new TransportSettings(1, 0, 1024, Duration.ZERO, Duration.ofSeconds(10));
+		return new TransportSettings(1, 0, 1024, Duration.ZERO, Duration.ofSeconds(10), DispatchMode.SINGLE);
 	}
 
 }

@@ -69,8 +69,10 @@ public interface ConnectionEventListener {
 	/**
 	 * One CoAP message.
 	 * @param size serialised CoAP-over-TCP size in bytes (without TLS record overhead), -1 if unknown
+	 * @param token CoAP token (hex; empty for signalling messages without token)
 	 */
-	default void onCoapMessage(ConnectionInfo connection, Direction direction, CoapMessageKind kind, int size) {
+	default void onCoapMessage(ConnectionInfo connection, Direction direction, CoapMessageKind kind, int size,
+			String token) {
 	}
 
 	ConnectionEventListener NO_OP = new ConnectionEventListener() {

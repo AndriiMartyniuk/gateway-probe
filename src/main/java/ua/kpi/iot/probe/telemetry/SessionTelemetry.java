@@ -87,7 +87,7 @@ public class SessionTelemetry implements ConnectionEventListener, RegistrationLi
 		}
 		eventLog.append(new SessionEvent(nowMicros(), SessionEvent.Type.TLS_HANDSHAKE, c.id(), null, transport(c),
 				millis(duration), resumed, failure == null ? null : failure.toString(), null, null, null, null,
-				traffic.bytesIn(), traffic.bytesOut(), traffic.handshakeFlights(), null, null, null));
+				traffic.bytesIn(), traffic.bytesOut(), traffic.handshakeFlights(), null, null, null, null));
 	}
 
 	@Override
@@ -110,18 +110,18 @@ public class SessionTelemetry implements ConnectionEventListener, RegistrationLi
 		metrics.connectionTraffic(transport(c), traffic.bytesIn(), traffic.bytesOut());
 		eventLog.append(new SessionEvent(nowMicros(), SessionEvent.Type.CLOSED, c.id(),
 				connection != null ? connection.endpoint : null, transport(c), millis(lifetime), null, reason.name(),
-				null, null, null, null, traffic.bytesIn(), traffic.bytesOut(), null, null, null, null));
+				null, null, null, null, traffic.bytesIn(), traffic.bytesOut(), null, null, null, null, null));
 	}
 
 	@Override
-	public void onCoapMessage(ConnectionInfo c, Direction direction, CoapMessageKind kind, int size) {
+	public void onCoapMessage(ConnectionInfo c, Direction direction, CoapMessageKind kind, int size, String token) {
 		String dir = direction == Direction.IN ? "in" : "out";
 		metrics.coapMessage(dir, kind.name(), size);
 		if (eventLog.logsCoapMessages()) {
 			Connection connection = find(c.remoteAddress());
 			eventLog.append(new SessionEvent(nowMicros(), SessionEvent.Type.COAP_MESSAGE, c.id(),
 					connection != null ? connection.endpoint : null, transport(c), null, null, null, null, null, null,
-					null, null, null, null, dir, kind.name(), size));
+					null, null, null, null, dir, kind.name(), size, token));
 		}
 	}
 
@@ -205,7 +205,7 @@ public class SessionTelemetry implements ConnectionEventListener, RegistrationLi
 			eventLog.append(new SessionEvent(nowMicros(), SessionEvent.Type.NOTIFICATION,
 					connection != null ? connection.id : null, registration.getEndpoint(), null, millis(age), null,
 					sequenceStatus, registration.getId(), path(observation), null, sample.sequence(), null, null, null,
-					null, null, null));
+					null, null, null, null));
 		}
 	}
 
@@ -279,7 +279,7 @@ public class SessionTelemetry implements ConnectionEventListener, RegistrationLi
 	private void log(String type, String conn, String endpoint, String transport, Double ms, Boolean resumed,
 			String reason, String regId, String path, Integer observations) {
 		eventLog.append(new SessionEvent(nowMicros(), type, conn, endpoint, transport, ms, resumed, reason, regId, path,
-				observations, null, null, null, null, null, null, null));
+				observations, null, null, null, null, null, null, null, null));
 	}
 
 	private static String path(Observation observation) {

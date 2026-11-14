@@ -13,6 +13,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -28,6 +29,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.mbed.coap.packet.CoapPacket;
+import com.mbed.coap.server.messaging.CoapTcpDispatcher;
 import com.mbed.coap.transport.CoapTcpListener;
 import com.mbed.coap.transport.CoapTcpTransport;
 import com.mbed.coap.transport.TransportContext;
@@ -99,6 +101,17 @@ public class NettyCoapTcpServerTransport implements CoapTcpTransport {
 
 	private ExecutorService dispatcher;
 
+	/** {@link DispatchMode#VIRTUAL}: one virtual thread per busy connection. */
+	private ExecutorService virtualDispatcher;
+
+	private static final AttributeKey<ConnectionMailbox> MAILBOX = AttributeKey.newInstance("probe.mailbox");
+
+	/** {@link DispatchMode#VIRTUAL}: tasks waiting in all connection mailboxes. */
+	private final AtomicInteger mailboxQueued = new AtomicInteger();
+
+	/** Never completed: in VIRTUAL mode java-coap's own receive loop is not used. */
+	private final CompletableFuture<CoapPacket> idleReceive = new CompletableFuture<>();
+
 	/**
 	 * @param sslContext server TLS context, or {@code null} for plain CoAP over TCP
 	 */
@@ -120,7 +133,13 @@ public class NettyCoapTcpServerTransport implements CoapTcpTransport {
 				new DefaultThreadFactory(name + "-accept"), NioIoHandler.newFactory());
 		ioGroup = new MultiThreadIoEventLoopGroup(settings.ioThreads(), new DefaultThreadFactory(name + "-io"),
 				NioIoHandler.newFactory());
-		dispatcher = Executors.newSingleThreadExecutor(Thread.ofPlatform().name(name + "-dispatch").factory());
+		if (settings.dispatch() == DispatchMode.VIRTUAL) {
+			virtualDispatcher = Executors
+				.newThreadPerTaskExecutor(Thread.ofVirtual().name(name + "-vdispatch-", 0).factory());
+		}
+		else {
+			dispatcher = Executors.newSingleThreadExecutor(Thread.ofPlatform().name(name + "-dispatch").factory());
+		}
 
 		ServerBootstrap bootstrap = new ServerBootstrap().group(acceptGroup, ioGroup)
 			.channel(NioServerSocketChannel.class)
@@ -161,10 +180,18 @@ public class NettyCoapTcpServerTransport implements CoapTcpTransport {
 			// interrupts the pending receive(); java-coap's CoapServer is already stopped at this point
 			dispatcher.shutdownNow();
 		}
+		if (virtualDispatcher != null) {
+			virtualDispatcher.shutdownNow();
+			idleReceive.completeExceptionally(new IllegalStateException("Transport stopped"));
+		}
 	}
 
 	@Override
 	public CompletableFuture<CoapPacket> receive() {
+		if (settings.dispatch() == DispatchMode.VIRTUAL) {
+			// packets go straight to java-coap's dispatcher from the connection mailboxes
+			return idleReceive;
+		}
 		// Always completed on the dispatch thread: never re-enters java-coap on an I/O thread and keeps the
 		// receive -> handle -> receive loop iterative instead of recursive.
 		try {
@@ -217,9 +244,9 @@ public class NettyCoapTcpServerTransport implements CoapTcpTransport {
 		return activeChannels.size();
 	}
 
-	/** Packets decoded but not yet handed to java-coap. */
+	/** Packets decoded but not yet handed to java-coap (single queue, or all connection mailboxes). */
 	public int inboundQueueSize() {
-		return inbound.size();
+		return settings.dispatch() == DispatchMode.VIRTUAL ? mailboxQueued.get() : inbound.size();
 	}
 
 	/**
@@ -365,12 +392,27 @@ public class NettyCoapTcpServerTransport implements CoapTcpTransport {
 
 		@Override
 		public void channelRead(ChannelHandlerContext ctx, Object msg) {
-			inbound.add((CoapPacket) msg);
+			CoapPacket packet = (CoapPacket) msg;
+			if (settings.dispatch() == DispatchMode.VIRTUAL) {
+				// java-coap hands its dispatcher to the transport as the TCP listener (CoapServerBuilderForTcp)
+				if (coapListener instanceof CoapTcpDispatcher dispatcher) {
+					mailbox(ctx.channel()).offer(() -> dispatcher.handle(packet));
+				}
+				else {
+					log.warn("No java-coap dispatcher registered; dropping {}", packet);
+				}
+			}
+			else {
+				inbound.add(packet);
+			}
 		}
 
 		@Override
 		public void channelActive(ChannelHandlerContext ctx) throws Exception {
 			CoapTcpListener listener = coapListener;
+			if (settings.dispatch() == DispatchMode.VIRTUAL) {
+				ctx.channel().attr(MAILBOX).set(new ConnectionMailbox(virtualDispatcher, mailboxQueued));
+			}
 			if (listener != null && ctx.channel().remoteAddress() != null) {
 				listener.onConnected((InetSocketAddress) ctx.channel().remoteAddress());
 			}
@@ -383,9 +425,29 @@ public class NettyCoapTcpServerTransport implements CoapTcpTransport {
 			// only connections that reached the CoAP layer were announced as connected
 			if (listener != null && ctx.channel().remoteAddress() != null
 					&& ctx.channel().attr(TransportContextHandler.TRANSPORT_CONTEXT_ATTR).get() != null) {
-				listener.onDisconnected((InetSocketAddress) ctx.channel().remoteAddress());
+				InetSocketAddress remote = (InetSocketAddress) ctx.channel().remoteAddress();
+				ConnectionMailbox mailbox = ctx.channel().attr(MAILBOX).get();
+				if (mailbox != null) {
+					// after the messages of this connection that are still queued
+					mailbox.offer(() -> listener.onDisconnected(remote));
+				}
+				else {
+					listener.onDisconnected(remote);
+				}
 			}
 			super.channelInactive(ctx);
+		}
+
+		private ConnectionMailbox mailbox(Channel channel) {
+			ConnectionMailbox mailbox = channel.attr(MAILBOX).get();
+			if (mailbox == null) {
+				mailbox = new ConnectionMailbox(virtualDispatcher, mailboxQueued);
+				ConnectionMailbox existing = channel.attr(MAILBOX).setIfAbsent(mailbox);
+				if (existing != null) {
+					mailbox = existing;
+				}
+			}
+			return mailbox;
 		}
 
 	}

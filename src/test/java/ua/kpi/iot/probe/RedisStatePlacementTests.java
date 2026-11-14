@@ -33,9 +33,8 @@ import redis.clients.jedis.JedisPool;
 import ua.kpi.iot.lwm2m.objects.ProbeSensor;
 
 /**
- * {@code probe.state.placement=REDIS}: registrations and observations live in Redis (Leshan's
- * {@code RedisRegistrationStore}, here on a Testcontainers Redis), so they are visible to another store instance —
- * as they would be to a restarted gateway instance.
+ * {@code probe.state.placement=REDIS_CACHED}: registrations and observations are replicated to Redis (here a Testcontainers
+ * Redis) and can be recovered by a fresh store — as by a restarted gateway instance.
  */
 @Import(TestcontainersConfiguration.class)
 @SpringBootTest(properties = { "probe.state.placement=REDIS", "probe.lwm2m.tcp.port=0",
@@ -47,6 +46,11 @@ class RedisStatePlacementTests {
 
 	@Autowired
 	JedisPool jedisPool;
+
+	/** Another Leshan store on the same Redis, as a restarted instance would create it. */
+	private RedisRegistrationStore recoveredStore() {
+		return new RedisRegistrationStore(jedisPool);
+	}
 
 	@Test
 	void registrationAndObservationsAreStoredInRedis() {
@@ -60,12 +64,15 @@ class RedisStatePlacementTests {
 			await().atMost(Duration.ofSeconds(5))
 				.until(() -> server.getObservationService().getObservations(registration).size() == 2);
 
-			// a second, independent store on the same Redis sees the same session state
-			RedisRegistrationStore other = new RedisRegistrationStore(jedisPool);
-			Registration stored = other.getRegistrationByEndpoint(endpoint);
-			assertThat(stored).isNotNull();
-			assertThat(stored.getId()).isEqualTo(registration.getId());
-			assertThat(other.getObservations(registration.getId())).hasSize(2);
+			// writes reach Redis asynchronously; a fresh store loaded from Redis recovers the same session state
+			await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+				RedisRegistrationStore recovered = recoveredStore();
+				Registration stored = recovered.getRegistrationByEndpoint(endpoint);
+				assertThat(stored).isNotNull();
+				assertThat(stored.getId()).isEqualTo(registration.getId());
+				assertThat(stored.getSocketAddress()).isEqualTo(registration.getSocketAddress());
+				assertThat(recovered.getObservations(registration.getId())).hasSize(2);
+			});
 		}
 		finally {
 			client.destroy(true);
@@ -73,7 +80,7 @@ class RedisStatePlacementTests {
 		}
 		// Deregister removes it from Redis as well
 		await().atMost(Duration.ofSeconds(5))
-			.until(() -> new RedisRegistrationStore(jedisPool).getRegistrationByEndpoint(endpoint) == null);
+			.until(() -> recoveredStore().getRegistrationByEndpoint(endpoint) == null);
 	}
 
 	private LeshanClient startClient(String endpoint, ScheduledExecutorService scheduler) {

@@ -204,25 +204,66 @@ single-session E1 runs; high volume).
 Smoke run (500 TLS devices from `fleet-emulator`, one laptop — not a measurement): full mutual-TLS 1.2 handshakes
 took 4 flights, resumed ones 3, as the protocol prescribes.
 
+### Dispatch: how messages reach java-coap
+
+```
+socket ─► Netty I/O threads: TLS, CoAP decode, classifier ─► dispatch ─► java-coap CoapTcpDispatcher
+                                                                     ─► Leshan (registration, observe, store)
+```
+
+java-coap processes inbound messages in a receive loop: it asks the transport for the next packet only after the
+current one has been fully processed (Leshan handlers, store calls and listeners included). With Leshan's transport
+that is one thread for all connections. `probe.lwm2m.transport.dispatch`:
+
+- `SINGLE` (default): that loop — one dispatch thread per listener; anything slow in message processing delays every
+  device.
+- `VIRTUAL`: one mailbox per connection, drained by a virtual thread; the transport calls java-coap's
+  `CoapTcpDispatcher.handle()` directly (java-coap passes the dispatcher to the transport as its TCP listener).
+  Messages of one connection are processed in order, different connections in parallel; a blocking store call parks
+  only that connection's virtual thread (JDK 24+ no longer pins carriers on `synchronized`, JEP 491). The
+  disconnect notification goes through the same mailbox, after the connection's queued messages.
+
+`probe_transport_dispatch_queue{transport}` = packets waiting (single queue, or all mailboxes).
+
 ### State placement (E2)
 
 `probe.state.placement`:
 
-- `IN_MEMORY` (default): Leshan's in-memory registration store; registrations and observations die with the
-  instance.
-- `REDIS`: Leshan's `RedisRegistrationStore` (`leshan-lwm2m-server-redis`) on the Redis of `spring.data.redis.*`;
-  registrations and observations survive the instance (`RedisStatePlacementTests` reads them back through a second
-  store). Keys look like `REG#EP#<endpoint>`, `OBS#OBSID#…`, `OBSIDS#REGID#…`, `LOCK#EP#…`.
+| Placement | Store | Reads / writes | After an instance restart |
+|---|---|---|---|
+| `IN_MEMORY` (default) | Leshan `InMemoryRegistrationStore` | memory | state gone |
+| `REDIS` | Leshan `RedisRegistrationStore` (Jedis) | every read and write is a blocking Redis round trip (per-endpoint Redis lock) | state in Redis |
+| `REDIS_CACHED` | `RedisBackedRegistrationStore` (Lettuce) | reads from memory; writes to memory, then asynchronously to Redis | loaded from Redis on start (`probe.state.redis.load-on-start`) |
 
-Leshan's Redis store is built against Jedis 4.4.6; the Spring Boot BOM brings Jedis 7.4.1. Register, observation
-storage and Deregister work on 7.4.1 (tests and smoke runs); the store's background expiration cleaning was not
-exercised yet.
+- `REDIS`: pool size `probe.state.redis.pool-size` (default 64; with `VIRTUAL` it bounds how many connections can
+  wait on Redis at once); metrics `probe_state_redis_pool_active`, `probe_state_redis_pool_waiters`. Built against
+  Jedis 4.4.6, runs on the Spring Boot BOM's 7.4.1 (tests and smoke runs).
+- `REDIS_CACHED`: keys `<prefix>reg:<registrationId>`, `<prefix>obs:<registrationId>` (prefix
+  `probe.state.redis.key-prefix`, default `probe:`); metrics `probe_state_redis_write_latency_seconds` (replication
+  lag), `probe_state_redis_write_pending`, `probe_state_redis_write_failures_total{operation}`. A crash loses the
+  changes not yet acknowledged — a parameter for the session-state model.
+- Over TCP, a registration and its observations loaded from Redis after a restart refer to connections that no longer
+  exist: devices reconnect and Register again, which replaces them (see the finding below).
 
-**Known issue (open):** under load with `REDIS`, a few Observe exchanges are lost: the device's response arrives, but
-java-coap logs `Can not process CoAP message … 205 … obs:1` and the request later times out (smoke runs with 500 TLS
-devices, 200/s, dropping 100: 3 and 111 failed Observes of 1200 in two runs; the same scenario with `IN_MEMORY`: 0 of
-1200). Not reproduced with 20 devices. Root cause not yet identified — suspected race between the response and
-Leshan's Redis write of the observation. Do not use `REDIS` results for observation recovery until resolved.
+#### Placement × dispatch (smoke runs, not measurements)
+
+500 TLS devices × 2 Probe Sensors from `fleet-emulator`, 200 connections/s, then 100 connections dropped; emulator,
+probe and Redis on one laptop. "Register processing" = connection established → registration accepted (event log).
+
+| Placement · dispatch | Observes OK / 1200 | java-coap "Can not process" | Register processing p50 / p90 / max (ms) |
+|---|---|---|---|
+| IN_MEMORY · SINGLE | 1200 | 0 | 0.8 / 47 / 135 |
+| IN_MEMORY · VIRTUAL | 1200 | 0 | 0.6 / 9 / 70 |
+| REDIS · SINGLE | 1087 (113 lost) | 48 | 912 / 5112 / 5479 |
+| REDIS · VIRTUAL | 1200 | 0 | 17 / 135 / 227 |
+| REDIS_CACHED · SINGLE | 1200 | 0 | 0.8 / 42 / 83 |
+| REDIS_CACHED · VIRTUAL | 1200 | 0 | 0.7 / 7 / 65 |
+
+With `REDIS · SINGLE` the blocking Redis calls saturate the single dispatch thread: messages wait for seconds,
+responses then find their requests already timed out or their connection closed (`Can not process CoAP message …`),
+and Observes are lost. `VIRTUAL` removes the queueing across devices; each message still pays its own Redis round
+trips (higher latency than in memory). `REDIS_CACHED` removes the round trips from the hot path at the cost of an
+asynchronous replica (in these runs: replication lag mean ≈ 2–3 ms, max ≈ 30–38 ms).
 
 ### Finding: connection loss without Deregister (Leshan 2.0.0-M18)
 
@@ -276,8 +317,10 @@ registration over TCP and TLS (listed and unlisted CA-signed devices; a CN/endpo
 connection event sequence, a failed TLS handshake, 20 devices registering in
 parallel over TLS with 4 I/O threads, metrics and event log contents (incl. handshake bytes / flights and CoAP message
 classification), server-initiated observation of three Probe Sensor instances including detection of a deliberately
-skipped sequence range, connection loss without Deregister, and (`RedisStatePlacementTests`) state placement in
-Redis.
+skipped sequence range, connection loss without Deregister, and (`RedisStatePlacementTests`, Testcontainers Redis)
+recovery of registration and observations from Redis (`RedisStatePlacementTests` for `REDIS`,
+`CachedRedisStatePlacementTests` for `REDIS_CACHED`) and their removal on Deregister. `VirtualDispatchTests` runs all
+application tests again with `dispatch=VIRTUAL`.
 
 ## Notes
 

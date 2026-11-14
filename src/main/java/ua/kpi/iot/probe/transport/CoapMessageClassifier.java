@@ -132,7 +132,8 @@ final class CoapMessageClassifier extends ChannelDuplexHandler {
 		catch (Exception ex) {
 			size = -1;
 		}
-		events.onCoapMessage(info.apply(ctx.channel()), direction, kind, size);
+		Opaque token = packet.getToken();
+		events.onCoapMessage(info.apply(ctx.channel()), direction, kind, size, token == null ? "" : token.toHex());
 	}
 
 }

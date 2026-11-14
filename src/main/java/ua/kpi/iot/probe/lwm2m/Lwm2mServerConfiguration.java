@@ -35,9 +35,16 @@ import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.core.io.Resource;
 
+import io.lettuce.core.RedisClient;
+import io.lettuce.core.RedisURI;
+import io.lettuce.core.api.StatefulRedisConnection;
+import io.lettuce.core.codec.ByteArrayCodec;
+import io.micrometer.core.instrument.Gauge;
+import io.micrometer.core.instrument.MeterRegistry;
 import redis.clients.jedis.JedisPool;
 import redis.clients.jedis.JedisPoolConfig;
 import ua.kpi.iot.lwm2m.objects.ProbeSensor;
+import ua.kpi.iot.probe.state.RedisBackedRegistrationStore;
 import ua.kpi.iot.probe.telemetry.SessionTelemetry;
 import ua.kpi.iot.probe.transport.CoapTcpServerEndpointsProvider;
 import ua.kpi.iot.probe.transport.CoapsTcpServerEndpointsProvider;
@@ -64,29 +71,76 @@ class Lwm2mServerConfiguration {
 		return new LoggingConnectionEventListener();
 	}
 
-	/** Jedis pool for Leshan's Redis store, on the same Redis as {@code spring.data.redis.*} (or Testcontainers). */
+	/** {@code REDIS}: Jedis pool for Leshan's {@code RedisRegistrationStore}, on {@code spring.data.redis.*}. */
 	@Bean(destroyMethod = "close")
 	@ConditionalOnProperty(name = "probe.state.placement", havingValue = "REDIS")
-	JedisPool lwm2mStateJedisPool(DataRedisConnectionDetails redis) {
+	JedisPool lwm2mStateJedisPool(DataRedisConnectionDetails redis, StateProperties state, MeterRegistry meters) {
+		DataRedisConnectionDetails.Standalone standalone = standalone(redis);
+		JedisPoolConfig config = new JedisPoolConfig();
+		config.setMaxTotal(state.redis().poolSize());
+		config.setMaxIdle(state.redis().poolSize());
+		JedisPool pool = new JedisPool(config, standalone.getHost(), standalone.getPort(), 2_000, redis.getUsername(),
+				redis.getPassword(), standalone.getDatabase());
+		Gauge.builder("probe.state.redis.pool.active", pool, JedisPool::getNumActive)
+			.description("Jedis connections in use")
+			.register(meters);
+		Gauge.builder("probe.state.redis.pool.waiters", pool, JedisPool::getNumWaiters)
+			.description("Threads waiting for a Jedis connection")
+			.register(meters);
+		return pool;
+	}
+
+	private static DataRedisConnectionDetails.Standalone standalone(DataRedisConnectionDetails redis) {
 		DataRedisConnectionDetails.Standalone standalone = redis.getStandalone();
 		if (standalone == null) {
-			throw new IllegalStateException("probe.state.placement=REDIS needs a standalone Redis (spring.data.redis.host)");
+			throw new IllegalStateException("Redis state placement needs a standalone Redis (spring.data.redis.host)");
 		}
-		return new JedisPool(new JedisPoolConfig(), standalone.getHost(), standalone.getPort(), 2_000,
-				redis.getUsername(), redis.getPassword(), standalone.getDatabase());
+		return standalone;
+	}
+
+	/** {@code REDIS_CACHED}: Lettuce client for the asynchronous replica, on {@code spring.data.redis.*}. */
+	@Bean(destroyMethod = "shutdown")
+	@ConditionalOnProperty(name = "probe.state.placement", havingValue = "REDIS_CACHED")
+	RedisClient lwm2mStateRedisClient(DataRedisConnectionDetails redis) {
+		DataRedisConnectionDetails.Standalone standalone = standalone(redis);
+		RedisURI.Builder uri = RedisURI.builder()
+			.withHost(standalone.getHost())
+			.withPort(standalone.getPort())
+			.withDatabase(standalone.getDatabase());
+		if (redis.getPassword() != null) {
+			if (redis.getUsername() != null) {
+				uri.withAuthentication(redis.getUsername(), redis.getPassword().toCharArray());
+			}
+			else {
+				uri.withPassword(redis.getPassword().toCharArray());
+			}
+		}
+		return RedisClient.create(uri.build());
+	}
+
+	@Bean(destroyMethod = "close")
+	@ConditionalOnProperty(name = "probe.state.placement", havingValue = "REDIS_CACHED")
+	StatefulRedisConnection<byte[], byte[]> lwm2mStateRedisConnection(RedisClient client) {
+		return client.connect(ByteArrayCodec.INSTANCE);
 	}
 
 	@Bean
 	LeshanServer leshanServer(Lwm2mServerProperties properties, StateProperties state,
-			ObjectProvider<JedisPool> jedisPool, EditableSecurityStore securityStore,
+			ObjectProvider<JedisPool> jedisPool, ObjectProvider<StatefulRedisConnection<byte[], byte[]>> redisConnection,
+			MeterRegistry meters,
+			EditableSecurityStore securityStore,
 			List<ConnectionEventListener> connectionListeners, List<RegistrationListener> registrationListeners,
 			List<ObservationListener> observationListeners) throws IOException, GeneralSecurityException {
 		ConnectionEventListener connectionEvents = new CompositeConnectionEventListener(connectionListeners);
 		LeshanServerBuilder builder = new LeshanServerBuilder();
 		builder.setObjectModelProvider(new VersionedModelProvider(ProbeSensor.defaultModelsWithProbeSensor()));
 		builder.setSecurityStore(securityStore);
-		if (state.placement() == StateProperties.Placement.REDIS) {
-			builder.setRegistrationStore(new RedisRegistrationStore(jedisPool.getObject()));
+		switch (state.placement()) {
+			case IN_MEMORY -> {
+			}
+			case REDIS -> builder.setRegistrationStore(new RedisRegistrationStore(jedisPool.getObject()));
+			case REDIS_CACHED -> builder.setRegistrationStore(new RedisBackedRegistrationStore(
+					redisConnection.getObject(), state.redis().keyPrefix(), state.redis().loadOnStart(), meters));
 		}
 		if (properties.tls().acceptCaSignedDevices()) {
 			builder.setAuthorizer(new DefaultAuthorizer(securityStore, new CaSignedDeviceSecurityChecker()));
