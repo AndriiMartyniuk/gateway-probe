@@ -307,6 +307,50 @@ multi-stage `Dockerfile` (Temurin 25 JDK → JRE, non-root user). Ports: 5683 (c
 5684 (coaps+tcp), 8080 (HTTP / actuator), 6379 (Redis, debugging only). TCP only:
 `PROBE_LWM2M_TLS_ENABLED=false docker compose up -d`. If 6379 is taken on the host: `REDIS_HOST_PORT=6380 docker compose up -d`.
 
+### Monitoring: Prometheus + Grafana
+
+`docker compose up -d` also starts **Prometheus** (http://localhost:9090) and **Grafana** (http://localhost:3000,
+anonymous viewer; `admin` / `admin` to edit). Everything is provisioned from `monitoring/`:
+
+```
+monitoring/
+  prometheus/prometheus.yml                  scrape config (5 s)
+  grafana/provisioning/datasources/          Prometheus datasource (uid "prometheus")
+  grafana/provisioning/dashboards/           file provider -> folder "LwM2M recovery"
+  grafana/dashboards/*.json                  generated dashboards
+  grafana/build-dashboards.py                generator: edit panels here, then run it
+```
+
+Scrape targets (`/actuator/prometheus`):
+
+| Job | Targets | When |
+|---|---|---|
+| `gateway-probe` | `gateway-probe:8080` | probe in this compose project |
+| `gateway-probe-host` | `host.docker.internal:8081`, `:18080` | probe on the host (`bootRun --server.port=8081`, E1 runs) |
+| `fleet-emulator` | `host.docker.internal:8090`, `:18090` | emulator on the host (default, E1 runs) |
+
+Targets that are not running show as `down` — expected.
+
+Dashboards (refresh 5 s, `instance` variable):
+
+- **Gateway probe** — Overview (registrations active, established connections, register rate, observe failures,
+  dispatch queue, CPU; *registered devices: probe vs emulator* — the recovery curve); Connections and TLS
+  (accepted/closed by reason, handshakes by kind, duration p50/p95, wire bytes, flights); LwM2M sessions (registration
+  events, register / observe latency, observations, notifications, missing / duplicate, data age); CoAP traffic
+  (messages and bytes per second by kind, mean size, wire bytes per connection); Dispatch and state placement
+  (dispatch queue, Redis replication lag, Jedis pool, write failures); JVM.
+- **Fleet emulator** — devices by state, connect attempts / failures / lost, connect latency, reconnect delay,
+  client-side TLS handshake and Register latency, registration failures, observe / notification traffic, JVM.
+
+All meters are registered at startup with every known tag combination (value 0). A meter created at its first event
+appears in Prometheus already at its burst value; with no earlier sample, `rate()` / `increase()` would show the burst
+as 0 — and bursts (reconnect waves) are what the dashboards are for.
+
+Ports: `PROMETHEUS_PORT`, `GRAFANA_PORT`; retention `PROMETHEUS_RETENTION` (default 15d); data in the named volumes
+`prometheus-data`, `grafana-data` (`docker compose down -v` removes them). After editing `prometheus.yml`:
+`curl -XPOST localhost:9090/-/reload`. Placement and dispatch of the compose probe: `PROBE_STATE_PLACEMENT`,
+`PROBE_LWM2M_TRANSPORT_DISPATCH`.
+
 ### HTTP / actuator
 
 Spring MVC on port 8080. Exposed actuator endpoints: `/actuator/health` (with details, incl. Redis),

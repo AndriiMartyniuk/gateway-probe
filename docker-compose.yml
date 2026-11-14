@@ -1,5 +1,7 @@
-# Local stand: gateway-probe + Redis.
+# Local stand: gateway-probe + Redis + Prometheus + Grafana.
 # TLS material must exist first: scripts/generate-dev-certs.sh  (or set PROBE_LWM2M_TLS_ENABLED=false)
+# Grafana: http://localhost:3000 (anonymous viewer; admin / admin), Prometheus: http://localhost:9090
+# Prometheus also scrapes gateway-probe / fleet-emulator running on the host (see monitoring/prometheus/prometheus.yml).
 services:
   redis:
     image: redis:8
@@ -26,6 +28,8 @@ services:
       SPRING_DATA_REDIS_PORT: 6379
       PROBE_LWM2M_TLS_ENABLED: ${PROBE_LWM2M_TLS_ENABLED:-true}
       PROBE_EVENT_LOG_ENABLED: ${PROBE_EVENT_LOG_ENABLED:-false}
+      PROBE_STATE_PLACEMENT: ${PROBE_STATE_PLACEMENT:-IN_MEMORY}
+      PROBE_LWM2M_TRANSPORT_DISPATCH: ${PROBE_LWM2M_TRANSPORT_DISPATCH:-SINGLE}
     ports:
       - "5683:5683"   # coap+tcp
       - "5684:5684"   # coaps+tcp
@@ -39,3 +43,52 @@ services:
     volumes:
       - ./certs:/app/certs:ro
       - ./event-logs:/app/event-logs
+
+  prometheus:
+    image: prom/prometheus:v3.15.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION:-15d}
+      - --web.enable-lifecycle          # POST /-/reload after editing prometheus.yml
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # emulator / probe started on the host (Linux; built in on Docker Desktop)
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9090/-/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  grafana:
+    image: grafana/grafana:13.2.6
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/gateway-probe.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  prometheus-data:
+  grafana-data:

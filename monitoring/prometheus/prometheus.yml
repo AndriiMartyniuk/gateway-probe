@@ -1,0 +1,29 @@
+# Scrapes gateway-probe and fleet-emulator (Spring Boot Actuator, /actuator/prometheus).
+# 5 s interval: experiment phases (reconnect waves) last seconds to minutes.
+global:
+  scrape_interval: 5s
+  scrape_timeout: 4s
+  evaluation_interval: 5s
+
+scrape_configs:
+  # gateway-probe inside this compose project
+  - job_name: gateway-probe
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["gateway-probe:8080"]
+        labels: { app: gateway-probe, where: compose }
+
+  # gateway-probe started on the host: ./gradlew bootRun --args='--server.port=8081' (8081),
+  # experiments/e1-component-cost/run.sh (18080)
+  - job_name: gateway-probe-host
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["host.docker.internal:8081", "host.docker.internal:18080"]
+        labels: { app: gateway-probe, where: host }
+
+  # fleet-emulator on the host: default port 8090, E1 runs 18090
+  - job_name: fleet-emulator
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["host.docker.internal:8090", "host.docker.internal:18090"]
+        labels: { app: fleet-emulator, where: host }

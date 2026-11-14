@@ -92,6 +92,14 @@ public class RedisBackedRegistrationStore extends InMemoryRegistrationStore {
 		Gauge.builder("probe.state.redis.write.pending", pending, AtomicInteger::get)
 			.description("State changes sent to Redis and not yet acknowledged")
 			.register(meters);
+		for (String operation : new String[] { "register", "update", "deregister", "replace", "observe",
+				"observe-replace", "observe-cancel", "observe-cancel-all" }) {
+			failureCounter(operation);
+		}
+	}
+
+	private Counter failureCounter(String operation) {
+		return Counter.builder("probe.state.redis.write.failures").tag("operation", operation).register(meters);
 	}
 
 	// ---- lifecycle: recover from Redis, then start the expiration cleaner ----------------------------------------
@@ -221,10 +229,7 @@ public class RedisBackedRegistrationStore extends InMemoryRegistrationStore {
 				writeLatency.record(Duration.ofNanos(System.nanoTime() - started));
 			}
 			else {
-				Counter.builder("probe.state.redis.write.failures")
-					.tag("operation", operation)
-					.register(meters)
-					.increment();
+				failureCounter(operation).increment();
 				log.warn("Redis write failed ({}): {}", operation, error.toString());
 			}
 		});
