@@ -426,6 +426,15 @@ public class NettyCoapTcpServerTransport implements CoapTcpTransport {
 			if (listener != null && ctx.channel().remoteAddress() != null
 					&& ctx.channel().attr(TransportContextHandler.TRANSPORT_CONTEXT_ATTR).get() != null) {
 				InetSocketAddress remote = (InetSocketAddress) ctx.channel().remoteAddress();
+				// java-coap identifies a TCP peer by its address only. Under load the close of a dead connection can
+				// be processed after a new connection from the same address (port reused by the client after a
+				// reset) became active; telling java-coap then would fail the exchanges of the live connection.
+				Channel current = activeChannels.get(remote);
+				if (current != null && current != ctx.channel()) {
+					log.debug("Close of {} superseded by a newer connection from the same address", remote);
+					super.channelInactive(ctx);
+					return;
+				}
 				ConnectionMailbox mailbox = ctx.channel().attr(MAILBOX).get();
 				if (mailbox != null) {
 					// after the messages of this connection that are still queued

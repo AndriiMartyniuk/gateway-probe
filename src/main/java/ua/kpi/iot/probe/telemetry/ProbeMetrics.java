@@ -53,6 +53,7 @@ public class ProbeMetrics {
 			established.put(transport, registry.gauge("probe.connections.established",
 					Tags.of("transport", transport), new AtomicInteger()));
 			acceptedCounter(transport);
+			addressReusedCounter(transport);
 			lifetimeTimer(transport);
 			registerLatencyTimer(transport);
 			for (CloseReason reason : CloseReason.values()) {
@@ -163,6 +164,17 @@ public class ProbeMetrics {
 	}
 
 	// ---- meter definitions (register returns the existing meter for known name + tags) ------------------------
+
+	public void addressReused(String transport) {
+		addressReusedCounter(transport).increment();
+	}
+
+	private Counter addressReusedCounter(String transport) {
+		return Counter.builder("probe.connections.address.reused")
+			.description("Connections accepted from the address of a connection whose close was not processed yet")
+			.tag("transport", transport)
+			.register(registry);
+	}
 
 	private Counter acceptedCounter(String transport) {
 		return Counter.builder("probe.connections.accepted")

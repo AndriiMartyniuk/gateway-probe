@@ -71,11 +71,18 @@ public class SessionTelemetry implements ConnectionEventListener, RegistrationLi
 	@Override
 	public void onAccepted(ConnectionInfo c) {
 		String transport = transport(c);
+		Connection previous = null;
 		if (c.remoteAddress() != null) {
-			connections.put(c.remoteAddress(), new Connection(c.id(), transport));
+			previous = connections.put(c.remoteAddress(), new Connection(c.id(), transport));
 		}
 		metrics.accepted(transport);
 		log(SessionEvent.Type.ACCEPTED, c.id(), null, transport, null, null, null, null, null, null);
+		if (previous != null) {
+			// the close of the previous connection from this address has not been processed yet
+			metrics.addressReused(transport);
+			log(SessionEvent.Type.ADDRESS_REUSED, c.id(), previous.endpoint, transport, null, null, previous.id, null,
+					null, null);
+		}
 	}
 
 	@Override
@@ -92,7 +99,7 @@ public class SessionTelemetry implements ConnectionEventListener, RegistrationLi
 
 	@Override
 	public void onEstablished(ConnectionInfo c, Duration sinceAccept) {
-		Connection connection = find(c.remoteAddress());
+		Connection connection = find(c);
 		if (connection != null) {
 			connection.establishedAt = System.nanoTime();
 			metrics.established(transport(c));
@@ -103,7 +110,10 @@ public class SessionTelemetry implements ConnectionEventListener, RegistrationLi
 
 	@Override
 	public void onClosed(ConnectionInfo c, CloseReason reason, Duration lifetime) {
-		Connection connection = c.remoteAddress() != null ? connections.remove(c.remoteAddress()) : null;
+		Connection connection = find(c);
+		if (connection != null) {
+			connections.remove(c.remoteAddress(), connection);
+		}
 		boolean wasEstablished = connection != null && connection.establishedAt != 0;
 		metrics.closed(transport(c), reason.name(), wasEstablished, lifetime);
 		Traffic traffic = c.traffic();
@@ -274,6 +284,12 @@ public class SessionTelemetry implements ConnectionEventListener, RegistrationLi
 
 	private Connection find(InetSocketAddress address) {
 		return address != null ? connections.get(address) : null;
+	}
+
+	/** The entry of this very connection: another connection may already have taken over its address. */
+	private Connection find(ConnectionInfo c) {
+		Connection connection = find(c.remoteAddress());
+		return connection != null && connection.id.equals(c.id()) ? connection : null;
 	}
 
 	private void log(String type, String conn, String endpoint, String transport, Double ms, Boolean resumed,

@@ -39,6 +39,12 @@ public record SessionEvent(long t, String event, String conn, String ep, String 
 		/** TLS handshake finished; {@code ms} = since accept, {@code reason} set on failure. */
 		public static final String TLS_HANDSHAKE = "tls_handshake";
 
+		/**
+		 * TCP accepted from the address of a connection whose close is not processed yet; {@code reason} = id of
+		 * that previous connection, {@code ep} = its endpoint.
+		 */
+		public static final String ADDRESS_REUSED = "address_reused";
+
 		/** Ready for CoAP; {@code ms} = since accept. */
 		public static final String ESTABLISHED = "established";
 
