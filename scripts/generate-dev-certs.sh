@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Generates development-only TLS material for the CoAP-over-TLS endpoint:
 #   ca.pem / ca.key           self-signed dev CA (EC P-256)
-#   server.p12                server key + chain, alias "server", password "changeit"
+#   server.p12                server key + chain, alias "server", password "changeit"; SAN localhost, 127.0.0.1,
+#                             probe, gateway-probe (Docker service names of the experiment stand and compose)
 #   <endpoint>.der/.key.der   client certificate (CN = LwM2M endpoint name) + PKCS#8 key, for test clients
 # Usage: scripts/generate-dev-certs.sh [output-dir] [client-endpoint ...]
 set -euo pipefail
@@ -21,7 +22,7 @@ openssl req -x509 -new -key ca.key -sha256 -days 3650 -subj "/CN=gateway-probe-d
 
 openssl ecparam -name prime256v1 -genkey -noout -out server.key
 openssl req -new -key server.key -subj "/CN=localhost" -out server.csr
-printf 'subjectAltName=DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth\n' > server.ext
+printf 'subjectAltName=DNS:localhost,IP:127.0.0.1,DNS:probe,DNS:gateway-probe\nextendedKeyUsage=serverAuth\n' > server.ext
 openssl x509 -req -in server.csr -CA ca.pem -CAkey ca.key -CAcreateserial -sha256 -days $DAYS \
   -extfile server.ext -out server.pem
 openssl pkcs12 -export -inkey server.key -in server.pem -certfile ca.pem -name server \
