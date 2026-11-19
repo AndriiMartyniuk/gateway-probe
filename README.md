@@ -279,6 +279,16 @@ Characterised by `connectionLossWithoutDeregisterLeavesStaleSessionUntilReRegist
 So, between the drop and the re-registration, server state and reality disagree. This is input for E3 and the
 session-state model.
 
+### Finding: stale close of a connection whose address is reused (reconnection storm)
+
+java-coap identifies a TCP peer by its address (`IP:port`) only. In a mass reconnect (theses stand, N ≥ 4000) the I/O
+threads, busy with TLS handshakes, processed the close of a dead connection *after* a new connection from the same
+address had become active; `onDisconnected(address)` then failed the new connection's Observe requests
+(`SendFailedException: Socket closed`) and the device stayed partially observed. The transport now does not pass a close
+to java-coap when a newer channel holds that address, and the telemetry tracks connections by id as well as address.
+Such cases are recorded as the event `address_reused` and the counter `probe_connections_address_reused_total`
+(13–107 per run at N = 4000–5000, no failures after the change).
+
 ## Run
 
 Requires the shared library in the local Maven repository:
@@ -371,3 +381,7 @@ application tests again with `dispatch=VIRTUAL`.
 - Leshan's TCP/TLS transport is labelled *experimental* by Leshan; the TLS endpoint supports X.509 only (no PSK/RPK).
 - Netty is aligned to the Spring Boot BOM version (4.2.x); our transport uses the 4.2 API
   (`MultiThreadIoEventLoopGroup`). Leshan's codec classes are compiled against an older 4.x line; tests pass.
+
+## License
+
+MIT, see [LICENSE](LICENSE). Dependencies keep their own licenses (Eclipse Leshan: EPL-2.0 / EDL-1.0; Netty, Spring Boot, java-coap: Apache-2.0).
